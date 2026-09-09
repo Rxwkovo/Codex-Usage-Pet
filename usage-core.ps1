@@ -1,4 +1,4 @@
-function Convert-Usage($response) {
+﻿function Convert-Usage($response) {
  $bucket = $null
  if ($null -ne $response.rateLimitsByLimitId) { $bucket = $response.rateLimitsByLimitId.codex }
  if ($null -eq $bucket -and ($null -eq $response.rateLimits.limitId -or $response.rateLimits.limitId -eq 'codex')) { $bucket = $response.rateLimits }
@@ -12,9 +12,9 @@ function Convert-Usage($response) {
  return $result
 }
 
-function Get-UsageMood($Data,[long]$Now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) {
+function Get-UsageMood($Data,[long]$Now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(),[double]$StaleSeconds=120,[double]$HappyThreshold=50,[double]$WorriedThreshold=20) {
  $unknown=@{name='unknown';remaining=$null;limiting=$null}
- if ($null -eq $Data -or $Data.status -ne 'ok' -or $null -eq $Data.updatedAt -or $Now-$Data.updatedAt -ge 120 -or $Data.updatedAt -gt $Now+5) { return $unknown }
+ if ($null -eq $Data -or $Data.status -ne 'ok' -or $null -eq $Data.updatedAt -or $Now-$Data.updatedAt -ge $StaleSeconds -or $Data.updatedAt -gt $Now+5) { return $unknown }
  $lowest=101.0; $limiting=$null
  foreach ($key in @('fiveHour','weekly')) {
   $window=$Data.$key
@@ -24,6 +24,6 @@ function Get-UsageMood($Data,[long]$Now=[DateTimeOffset]::UtcNow.ToUnixTimeSecon
   if ([double]::IsNaN($r) -or [double]::IsInfinity($r) -or $r -lt 0 -or $r -gt 100) { return $unknown }
   if ($r -lt $lowest) { $lowest=$r; $limiting=$key }
  }
- $name=if ($lowest -le 0) {'exhausted'} elseif ($lowest -le 20) {'worried'} elseif ($lowest -ge 50) {'happy'} else {'calm'}
+ $name=if ($lowest -le 0) {'exhausted'} elseif ($lowest -le $WorriedThreshold) {'worried'} elseif ($lowest -ge $HappyThreshold) {'happy'} else {'calm'}
  return @{name=$name;remaining=$lowest;limiting=$limiting}
 }

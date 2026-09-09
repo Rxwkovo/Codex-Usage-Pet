@@ -14,6 +14,9 @@ jobs:
       - name: Verify quota expressions and stale data
         shell: powershell
         run: ./tests/mood.tests.ps1
+      - name: Verify preferences and interrupted transitions
+        shell: powershell
+        run: ./tests/preferences.tests.ps1
       - name: Build Windows executable
         shell: powershell
         run: ./build.ps1
