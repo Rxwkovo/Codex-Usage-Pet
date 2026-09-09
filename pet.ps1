@@ -77,7 +77,11 @@ function Show-Usage {
   $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
   foreach ($entry in @(@('Five','5 小时',$data.fiveHour),@('Week','一周',$data.weekly))) {
    $text = $window.FindName($entry[0]+'Text'); $bar = $window.FindName($entry[0]+'Bar'); $w = $entry[2]
-   if ($null -eq $w) { $text.Text = $entry[1]+'  ·  暂无数据'; $bar.Value=0; $text.ToolTip='请先使用 ChatGPT 账户登录 Codex'; continue }
+   if ($null -eq $w) {
+    $text.Text = $entry[1]+'  ·  暂无数据'
+    $bar.BeginAnimation([Windows.Controls.Primitives.RangeBase]::ValueProperty,$null)
+    $bar.Value=0; $bar.Tag=$null; $text.ToolTip='请先使用 ChatGPT 账户登录 Codex'; continue
+   }
    $expired = $null -ne $w.resetsAt -and [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -ge $w.resetsAt
    $text.Text = $entry[1]+'  ·  剩余 '+$w.remaining+'%'
    $targetValue = $w.remaining
@@ -89,6 +93,7 @@ function Show-Usage {
     $ease=New-Object Windows.Media.Animation.CubicEase; $ease.EasingMode='EaseOut'; $anim.EasingFunction=$ease
     $bar.BeginAnimation([Windows.Controls.Primitives.RangeBase]::ValueProperty,$anim)
    }
+   $text.ToolTip='重置时间：暂无数据'
    if ($null -ne $w.resetsAt) { $text.ToolTip='重置时间：'+[DateTimeOffset]::FromUnixTimeSeconds($w.resetsAt).LocalDateTime.ToString('MM-dd HH:mm') }
   }
   $sync = $window.FindName('SyncText')
