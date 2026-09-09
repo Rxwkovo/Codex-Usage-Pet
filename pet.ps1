@@ -1,7 +1,8 @@
-﻿param([switch]$Preview,[switch]$Smoke,[ValidateSet('idle','walk','sit','sleep','stretch')][string]$PreviewAction='idle')
+﻿param([switch]$Preview,[switch]$Smoke,[ValidateSet('idle','walk','sit','sleep','stretch','wave')][string]$PreviewAction='idle',[double]$PreviewAge=3,[ValidateSet('unknown','happy','calm','worried','exhausted')][string]$PreviewMood='unknown')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 . (Join-Path $PSScriptRoot 'behavior-core.ps1')
+. (Join-Path $PSScriptRoot 'usage-core.ps1')
 $statePath = Join-Path $PSScriptRoot 'settings.json'
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Width="280" Height="430" WindowStyle="None" AllowsTransparency="True" Background="Transparent" Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize" FontFamily="Microsoft YaHei" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="Grayscale" Title="码团 · Codex Pet">
@@ -12,13 +13,13 @@ $statePath = Join-Path $PSScriptRoot 'settings.json'
   <Viewbox x:Name="Pet" Width="230" Height="220" VerticalAlignment="Bottom" Margin="0,0,0,154" Cursor="Hand" RenderTransformOrigin="0.5,0.85">
    <Viewbox.RenderTransform><ScaleTransform x:Name="Squish"/></Viewbox.RenderTransform>
    <Canvas Width="220" Height="210">
-    <Ellipse Canvas.Left="42" Canvas.Top="187" Width="140" Height="13" Fill="#24000000"/>
+    <Ellipse Canvas.Left="42" Canvas.Top="187" Width="140" Height="13" Fill="#24000000"><Ellipse.RenderTransform><TranslateTransform x:Name="GroundShift"/></Ellipse.RenderTransform></Ellipse>
     <Canvas x:Name="Body" RenderTransformOrigin="0.5,0.5">
      <Canvas.RenderTransform><TransformGroup><ScaleTransform x:Name="PoseScale" CenterX="110" CenterY="185"/><RotateTransform x:Name="PoseAngle" CenterX="110" CenterY="145"/><TranslateTransform x:Name="Float"/></TransformGroup></Canvas.RenderTransform>
-     <Path Data="M 55,148 Q 9,140 24,114 Q 39,108 58,124" Fill="#87DEBF" Stroke="#367965" StrokeThickness="3"><Path.RenderTransform><RotateTransform x:Name="LeftArm" CenterX="55" CenterY="133"/></Path.RenderTransform></Path>
-     <Path Data="M 169,145 Q 207,125 202,105 Q 188,98 173,124" Fill="#87DEBF" Stroke="#367965" StrokeThickness="3"><Path.RenderTransform><RotateTransform x:Name="RightArm" CenterX="173" CenterY="133"/></Path.RenderTransform></Path>
-     <Ellipse Canvas.Left="65" Canvas.Top="167" Width="32" Height="23" Fill="#69BF9F" Stroke="#367965" StrokeThickness="3"><Ellipse.RenderTransform><RotateTransform x:Name="LeftFoot" CenterX="16" CenterY="3"/></Ellipse.RenderTransform></Ellipse>
-     <Ellipse Canvas.Left="131" Canvas.Top="167" Width="32" Height="23" Fill="#69BF9F" Stroke="#367965" StrokeThickness="3"><Ellipse.RenderTransform><RotateTransform x:Name="RightFoot" CenterX="16" CenterY="3"/></Ellipse.RenderTransform></Ellipse>
+     <Path x:Name="StandingLeftArm" Data="M 55,148 Q 9,140 24,114 Q 39,108 58,124" Fill="#87DEBF" Stroke="#367965" StrokeThickness="3"><Path.RenderTransform><RotateTransform x:Name="LeftArm" CenterX="55" CenterY="133"/></Path.RenderTransform></Path>
+     <Path x:Name="StandingRightArm" Data="M 169,145 Q 207,125 202,105 Q 188,98 173,124" Fill="#87DEBF" Stroke="#367965" StrokeThickness="3"><Path.RenderTransform><RotateTransform x:Name="RightArm" CenterX="173" CenterY="133"/></Path.RenderTransform></Path>
+     <Ellipse x:Name="StandingLeftFoot" Canvas.Left="65" Canvas.Top="167" Width="32" Height="23" Fill="#69BF9F" Stroke="#367965" StrokeThickness="3"><Ellipse.RenderTransform><TransformGroup><RotateTransform x:Name="LeftFoot" CenterX="16" CenterY="3"/><TranslateTransform x:Name="LeftStep"/></TransformGroup></Ellipse.RenderTransform></Ellipse>
+     <Ellipse x:Name="StandingRightFoot" Canvas.Left="131" Canvas.Top="167" Width="32" Height="23" Fill="#69BF9F" Stroke="#367965" StrokeThickness="3"><Ellipse.RenderTransform><TransformGroup><RotateTransform x:Name="RightFoot" CenterX="16" CenterY="3"/><TranslateTransform x:Name="RightStep"/></TransformGroup></Ellipse.RenderTransform></Ellipse>
      <Path Data="M 111,46 Q 98,18 118,12 Q 142,19 122,42" Fill="#BCF5C4" Stroke="#367965" StrokeThickness="3"><Path.RenderTransform><RotateTransform x:Name="Leaf" CenterX="114" CenterY="46"/></Path.RenderTransform></Path>
      <Path Data="M 112,42 Q 90,29 83,40 Q 89,55 112,49" Fill="#7DDFB2" Stroke="#367965" StrokeThickness="3"/>
      <Border Canvas.Left="43" Canvas.Top="45" Width="140" Height="133" CornerRadius="56,56,48,48" BorderBrush="#367965" BorderThickness="3">
@@ -26,15 +27,41 @@ $statePath = Join-Path $PSScriptRoot 'settings.json'
      </Border>
      <Ellipse Canvas.Left="59" Canvas.Top="61" Width="46" Height="16" Fill="#88FFFFFF" RenderTransformOrigin="0.5,0.5"><Ellipse.RenderTransform><RotateTransform Angle="-20"/></Ellipse.RenderTransform></Ellipse>
      <Border Canvas.Left="61" Canvas.Top="86" Width="104" Height="57" CornerRadius="24" Background="#203E38"/>
+     <Canvas x:Name="MoodFace"><Canvas.RenderTransform><TranslateTransform x:Name="Gaze"/></Canvas.RenderTransform>
      <Canvas x:Name="Eyes">
       <Canvas.RenderTransform><TransformGroup><ScaleTransform x:Name="Blink" CenterY="110"/><ScaleTransform x:Name="SleepEyes" CenterY="110"/></TransformGroup></Canvas.RenderTransform>
-      <Ellipse Canvas.Left="82" Canvas.Top="102" Width="10" Height="17" Fill="#C4FFE1"/>
-      <Ellipse Canvas.Left="135" Canvas.Top="102" Width="10" Height="17" Fill="#C4FFE1"/>
+      <Canvas x:Name="OpenEyes"><Ellipse Canvas.Left="82" Canvas.Top="102" Width="10" Height="17" Fill="#C4FFE1"/>
+      <Ellipse Canvas.Left="135" Canvas.Top="102" Width="10" Height="17" Fill="#C4FFE1"/></Canvas>
+      <Path x:Name="HappyEyes" Data="M 81,111 Q 87,100 94,111 M 134,111 Q 141,100 147,111" Stroke="#D8FFE9" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Opacity="0"/>
      </Canvas>
-     <Path Data="M 105,120 Q 113,128 122,120" Stroke="#C4FFE1" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+     <Path x:Name="MoodMouth" Data="M 106,123 L 120,123" Stroke="#C4FFE1" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"><Path.RenderTransform><ScaleTransform x:Name="Smile" CenterX="113" CenterY="120"/></Path.RenderTransform></Path>
+     <Path x:Name="WorryBrows" Data="M 81,99 L 94,94 M 133,94 L 146,99" Stroke="#C4FFE1" StrokeThickness="2.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Opacity="0"/>
+     <Path x:Name="Tears" Data="M 144,119 Q 136,128 144,131 Q 152,128 144,119 Z" Fill="#91CDF6" Opacity="0"/>
      <Ellipse Canvas.Left="70" Canvas.Top="120" Width="13" Height="6" Fill="#CF91A1" Opacity="0.7"/>
      <Ellipse Canvas.Left="144" Canvas.Top="120" Width="13" Height="6" Fill="#CF91A1" Opacity="0.7"/>
+     </Canvas>
      <TextBlock Canvas.Left="96" Canvas.Top="149" Text="&lt;/&gt;" FontFamily="Consolas" FontWeight="Bold" Foreground="#357D65" FontSize="18"/>
+     <Canvas x:Name="SeatedHands" Opacity="0" IsHitTestVisible="False">
+      <Canvas.RenderTransform><TranslateTransform x:Name="HandSettle"/></Canvas.RenderTransform>
+      <Path Data="M 51,122 C 40,124 35,141 39,155 C 41,165 50,168 57,161 L 65,143" Fill="#89DFBC" Stroke="#367965" StrokeThickness="3" StrokeLineJoin="Round"/>
+      <Path Data="M 174,122 C 185,124 190,141 186,155 C 184,165 175,168 168,161 L 160,143" Fill="#89DFBC" Stroke="#367965" StrokeThickness="3" StrokeLineJoin="Round"/>
+      <Path Data="M 43,154 Q 48,157 53,153 M 172,153 Q 177,157 182,154" Stroke="#5DAA8D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+     </Canvas>
+     <Canvas x:Name="SeatedFeet" Opacity="0" IsHitTestVisible="False">
+      <Canvas.RenderTransform><TranslateTransform x:Name="FootReach"/></Canvas.RenderTransform>
+      <Path Data="M 79,155 C 59,153 47,162 49,177 C 51,191 72,195 91,183 L 101,167" Fill="#7BCCAB" Stroke="#367965" StrokeThickness="3" StrokeLineJoin="Round"/>
+      <Path Data="M 145,155 C 165,153 177,162 175,177 C 173,191 152,195 133,183 L 123,167" Fill="#7BCCAB" Stroke="#367965" StrokeThickness="3" StrokeLineJoin="Round"/>
+      <Ellipse Canvas.Left="49" Canvas.Top="158" Width="44" Height="35" Fill="#BDF0D2" Stroke="#367965" StrokeThickness="3" RenderTransformOrigin="0.5,0.5"><Ellipse.RenderTransform><RotateTransform Angle="-18"/></Ellipse.RenderTransform></Ellipse>
+      <Ellipse Canvas.Left="132" Canvas.Top="158" Width="44" Height="35" Fill="#BDF0D2" Stroke="#367965" StrokeThickness="3" RenderTransformOrigin="0.5,0.5"><Ellipse.RenderTransform><RotateTransform Angle="18"/></Ellipse.RenderTransform></Ellipse>
+      <Ellipse Canvas.Left="61" Canvas.Top="174" Width="19" Height="11" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="145" Canvas.Top="174" Width="19" Height="11" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="57" Canvas.Top="168" Width="5" Height="5" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="66" Canvas.Top="164" Width="5" Height="5" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="75" Canvas.Top="166" Width="5" Height="5" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="145" Canvas.Top="166" Width="5" Height="5" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="154" Canvas.Top="164" Width="5" Height="5" Fill="#83CFA9"/>
+      <Ellipse Canvas.Left="163" Canvas.Top="168" Width="5" Height="5" Fill="#83CFA9"/>
+     </Canvas>
     </Canvas>
     <TextBlock x:Name="SleepMark" Canvas.Left="166" Canvas.Top="65" Text="z Z" FontFamily="Segoe UI" FontSize="23" FontWeight="SemiBold" Foreground="#71AE97" Opacity="0" IsHitTestVisible="False"><TextBlock.RenderTransform><TranslateTransform x:Name="SleepFloat"/></TextBlock.RenderTransform></TextBlock>
    </Canvas>
@@ -71,6 +98,34 @@ $rightArm = $window.FindName('RightArm')
 $sleepEyes = $window.FindName('SleepEyes')
 $sleepMark = $window.FindName('SleepMark')
 $sleepFloat = $window.FindName('SleepFloat')
+$seatedHands=$window.FindName('SeatedHands')
+$seatedFeet=$window.FindName('SeatedFeet')
+$handSettle=$window.FindName('HandSettle')
+$footReach=$window.FindName('FootReach')
+$groundShift=$window.FindName('GroundShift')
+$standingHands=@($window.FindName('StandingLeftArm'),$window.FindName('StandingRightArm'))
+$standingFeet=@($window.FindName('StandingLeftFoot'),$window.FindName('StandingRightFoot'))
+$leftStep=$window.FindName('LeftStep'); $rightStep=$window.FindName('RightStep')
+$gaze=$window.FindName('Gaze'); $smile=$window.FindName('Smile')
+$script:mood='unknown'
+function Set-UsageMood($mood) {
+ $text=switch ($mood.name) { 'happy' {'额度充足，元气满满'} 'calm' {'额度够用，安心陪伴'} 'worried' {'额度快用完了，有点担心'} 'exhausted' {'额度用完了，等重置再一起玩'} default {'额度尚未同步，保持中性表情'} }
+ if ($null -ne $mood.remaining) { $text+='（'+$(if ($mood.limiting -eq 'weekly') {'一周'} else {'5 小时'})+'剩余 '+$mood.remaining+'%）' }
+ $pet.ToolTip=$text
+ if ($script:mood -eq $mood.name) { return }
+ $script:mood=$mood.name
+ $mouth=switch ($mood.name) { 'happy' {'M 102,119 Q 113,139 125,119'} 'calm' {'M 105,120 Q 113,128 122,120'} 'worried' {'M 105,126 Q 113,119 122,126'} 'exhausted' {'M 103,128 Q 113,116 124,128'} default {'M 106,123 L 120,123'} }
+ $window.FindName('MoodMouth').Data=[Windows.Media.Geometry]::Parse($mouth)
+ $window.FindName('HappyEyes').Opacity=$(if ($mood.name -eq 'happy') {1.0} else {0.0})
+ $window.FindName('OpenEyes').Opacity=$(if ($mood.name -eq 'happy') {0.0} else {1.0})
+ $window.FindName('WorryBrows').Opacity=$(if ($mood.name -in @('worried','exhausted')) {1.0} else {0.0})
+ $window.FindName('Tears').Opacity=$(if ($mood.name -eq 'exhausted') {0.9} else {0.0})
+ if (-not $Preview -and -not $script:quiet) {
+  $a=New-Object Windows.Media.Animation.DoubleAnimation
+  $a.From=0.55; $a.To=1; $a.Duration=[TimeSpan]::FromMilliseconds(350)
+  $window.FindName('MoodFace').BeginAnimation([Windows.UIElement]::OpacityProperty,$a)
+ }
+}
 $script:worker = $null
 $script:nextRefresh = [DateTime]::MinValue
 $script:usageStamp = ''
@@ -83,9 +138,10 @@ function Refresh-Usage {
 }
 function Show-Usage {
  $path = Join-Path $PSScriptRoot 'usage.json'
- if (-not (Test-Path -LiteralPath $path)) { return }
+ if (-not (Test-Path -LiteralPath $path)) { Set-UsageMood (Get-UsageMood $null); return }
  try {
   $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  Set-UsageMood (Get-UsageMood $data)
   foreach ($entry in @(@('Five','5 小时',$data.fiveHour),@('Week','一周',$data.weekly))) {
    $text = $window.FindName($entry[0]+'Text'); $bar = $window.FindName($entry[0]+'Bar'); $w = $entry[2]
    if ($null -eq $w) {
@@ -114,7 +170,7 @@ function Show-Usage {
    $route = $(if ($data.route -eq 'direct') {'直连'} else {'系统网络'})
    $sync.Text = $(if ($data.status -eq 'ok' -and $age -lt 120) {$route+' '+$stamp+' · 悬停查看重置'} else {'缓存 '+$stamp+' · 连接待恢复'})
   } else { $sync.Text='未连接 · 请登录 Codex 后刷新' }
- } catch { }
+ } catch { Set-UsageMood (Get-UsageMood $null) }
 }
 $script:quiet = $false
 $script:scale = 1.0
@@ -128,23 +184,35 @@ $script:action = 'idle'
 $script:lastAction = ''
 $script:actionStarted = [DateTime]::Now
 $script:actionDuration = 0.0
-$script:nextAction = [DateTime]::Now.AddSeconds(14)
+$script:nextAction = [DateTime]::Now.AddSeconds(7)
 $script:walkFrom = 0.0
 $script:walkTo = 0.0
 $script:clock = [Diagnostics.Stopwatch]::StartNew()
 $script:nextBlink = 3.0
+$script:lookX=0.0; $script:lookY=0.0; $script:nextLook=2.0
+$script:doubleBlink=$false; $script:happyUntil=0.0; $script:frameAt=0.0
+$script:renderedPose=$null; $script:fromPose=$null
 function Apply-Pose($pose) {
+ $script:renderedPose=$pose.Clone()
  $poseScale.ScaleX=$pose.sx; $poseScale.ScaleY=$pose.sy; $poseAngle.Angle=$pose.angle
  $float.X=$pose.x; $float.Y=$pose.y
  $leftFoot.Angle=$pose.foot; $rightFoot.Angle=-$pose.foot
- $leftArm.Angle=$pose.arm; $rightArm.Angle=-$pose.arm
+ $leftArm.Angle=$pose.arm; $rightArm.Angle=-$pose.arm+$pose.wave
+ $leftStep.Y=$pose.leftStep; $rightStep.Y=$pose.rightStep
  $sleepEyes.ScaleY=$pose.eye; $sleepMark.Opacity=$pose.sleep
+ $seatedHands.Opacity=$pose.sitHands; $seatedFeet.Opacity=$pose.sitFeet
+ foreach ($hand in $standingHands) { $hand.Opacity=1-$pose.sitHands }
+ foreach ($foot in $standingFeet) { $foot.Opacity=1-$pose.sitFeet }
+ $handSettle.Y=-8*(1-$pose.sitHands)
+ $footReach.Y=-9*(1-$pose.sitFeet)
+ $groundShift.Y=$pose.ground
 }
 function Set-PetAction([string]$action) {
+ $script:fromPose=$script:renderedPose
  if ($action -ne 'idle') { $script:quiet=$false }
  $script:action=$action; $script:actionStarted=[DateTime]::Now
- $script:nextAction=[DateTime]::Now.AddSeconds((Get-Random -Minimum 14 -Maximum 29))
- $script:actionDuration = switch ($action) { 'walk' {8.0} 'sit' {12.0} 'sleep' {18.0} 'stretch' {5.0} default {0.0} }
+ $script:nextAction=[DateTime]::Now.AddSeconds((Get-Random -Minimum 12 -Maximum 25))
+ $script:actionDuration = switch ($action) { 'walk' {8.0} 'sit' {12.0} 'sleep' {18.0} 'stretch' {5.0} 'wave' {3.8} default {0.0} }
  $blink.BeginAnimation([Windows.Media.ScaleTransform]::ScaleYProperty,$null)
  if ($action -eq 'walk') {
   $area=[Windows.SystemParameters]::WorkArea
@@ -153,37 +221,64 @@ function Set-PetAction([string]$action) {
  }
  if ($action -ne 'idle') { $script:lastAction=$action }
  if ($null -eq $script:focusUntil) {
-  $label.Text = switch ($action) { 'walk' {'码团  ·  出门溜达一下'} 'sit' {'码团  ·  坐着陪你'} 'sleep' {'码团  ·  小憩一会儿'} 'stretch' {'码团  ·  伸个懒腰'} default {'码团  ·  陪你写点东西'} }
+  $label.Text = switch ($action) { 'walk' {'码团  ·  出门溜达一下'} 'sit' {'码团  ·  坐着陪你'} 'sleep' {'码团  ·  小憩一会儿'} 'stretch' {'码团  ·  伸个懒腰'} 'wave' {'码团  ·  嗨，我在呢'} default {'码团  ·  陪你写点东西'} }
  }
- if ($action -eq 'idle') { Apply-Pose (Get-PetPose 'idle' 0 0) }
+ if ($action -eq 'idle' -and $script:quiet) { Apply-Pose (Get-PetPose 'idle' 0 0); $gaze.X=0; $gaze.Y=0 }
 }
 function Update-Behavior {
  $now=[DateTime]::Now
- if ($script:quiet -or $null -ne $script:drag -or $menu.IsOpen) { return }
- if ($script:action -eq 'idle' -and $script:randomActions -and $null -eq $script:focusUntil -and -not $window.IsMouseOver -and $now -ge $script:nextAction) {
-  $choices=@('walk','sit','sleep','stretch') | Where-Object { $_ -ne $script:lastAction }
+ $t=$script:clock.Elapsed.TotalSeconds
+ $dt=[Math]::Min(0.1,[Math]::Max(0.001,$t-$script:frameAt)); $script:frameAt=$t
+ if ($script:quiet) { return }
+ if ($script:action -eq 'idle' -and $script:randomActions -and $null -eq $script:focusUntil -and $null -eq $script:drag -and -not $menu.IsOpen -and -not $window.IsMouseOver -and $now -ge $script:nextAction) {
+  $choices=@('walk','sit','sit','sleep','stretch','wave') | Where-Object { $_ -ne $script:lastAction }
   Set-PetAction (Get-Random -InputObject $choices)
  }
  $age=($now-$script:actionStarted).TotalSeconds
  if ($script:action -ne 'idle' -and $age -ge $script:actionDuration) {
   if ($script:action -eq 'walk') { $window.Left=$script:walkTo }
-  Set-PetAction 'idle'
+  $finished=$script:action
+  if ($finished -eq 'sleep') { Set-PetAction 'stretch' } else { Set-PetAction 'idle' }
+  $age=0.0
  }
- $pose=Get-PetPose $script:action $age $script:actionDuration
- if ($script:action -eq 'idle') { $pose.y=[Math]::Sin($script:clock.Elapsed.TotalSeconds*0.85)*3 }
+ $pose=Get-PetPose $script:action $age $script:actionDuration ([Math]::Abs($script:walkTo-$script:walkFrom))
+ if ($script:action -eq 'idle') {
+  $breath=[Math]::Sin($t*1.65)
+  $pose.y=-1.2*$breath; $pose.sy=1+0.009*$breath; $pose.sx=1-0.004*$breath
+  $pose.angle=[Math]::Sin($t*0.53)*0.8+$gaze.X*0.32
+  $pose.arm=[Math]::Sin($t*1.1)*2
+ }
+ if ($null -ne $script:fromPose -and $age -lt 0.36) {
+  $f=[Math]::Min(1.0,[Math]::Max(0.0,$age/0.36)); $f=$f*$f*(3-2*$f)
+  foreach ($key in @($pose.Keys)) { if ($key -ne 'progress') { $pose[$key]=$script:fromPose[$key]+($pose[$key]-$script:fromPose[$key])*$f } }
+ }
  Apply-Pose $pose
  if ($script:action -eq 'walk') { $window.Left=$script:walkFrom+($script:walkTo-$script:walkFrom)*$pose.progress }
- $leaf.Angle=[Math]::Sin($script:clock.Elapsed.TotalSeconds*1.1)*6
+ $leafTarget=[Math]::Sin($t*1.7)*$(if ($script:action -eq 'sleep') {0.7} else {3.0})-$pose.angle*0.55
+ $leaf.Angle+=($leafTarget-$leaf.Angle)*(1-[Math]::Exp(-5*$dt))
  $sleepFloat.Y=-[Math]::Sin($age*1.8)*4
- if ($script:clock.Elapsed.TotalSeconds -ge $script:nextBlink -and $script:action -ne 'sleep') {
+ if (-not $pet.IsMouseOver -and $t -ge $script:nextLook) {
+  $script:lookX=(Get-Random -Minimum -24 -Maximum 25)/10.0
+  $script:lookY=(Get-Random -Minimum -12 -Maximum 13)/10.0
+  $script:nextLook=$t+(Get-Random -Minimum 3 -Maximum 7)
+ }
+ if ($script:action -eq 'walk') { $script:lookX=[Math]::Sign($script:walkTo-$script:walkFrom)*3.0; $script:lookY=0.0 }
+ if ($script:action -eq 'sleep') { $script:lookX=0.0; $script:lookY=0.0 }
+ $gaze.X+=($script:lookX-$gaze.X)*(1-[Math]::Exp(-7*$dt))
+ $gaze.Y+=($script:lookY-$gaze.Y)*(1-[Math]::Exp(-7*$dt))
+ $smileTarget=$(if ($t -lt $script:happyUntil -and $script:mood -notin @('worried','exhausted')) {1.45} else {1.0})
+ $smile.ScaleY+=($smileTarget-$smile.ScaleY)*(1-[Math]::Exp(-8*$dt))
+ if ($t -ge $script:nextBlink -and $script:action -ne 'sleep') {
   $a=New-Object Windows.Media.Animation.DoubleAnimation
-  $a.From=1; $a.To=0.09; $a.Duration=[TimeSpan]::FromMilliseconds(95); $a.AutoReverse=$true
+  $a.From=1; $a.To=0.09; $a.Duration=[TimeSpan]::FromMilliseconds((Get-Random -Minimum 80 -Maximum 111)); $a.AutoReverse=$true
   $blink.BeginAnimation([Windows.Media.ScaleTransform]::ScaleYProperty,$a)
-  $script:nextBlink=$script:clock.Elapsed.TotalSeconds+(Get-Random -Minimum 3 -Maximum 7)
+  if (-not $script:doubleBlink -and (Get-Random -Minimum 0 -Maximum 6) -eq 0) { $script:nextBlink=$t+0.3; $script:doubleBlink=$true }
+  else { $script:nextBlink=$t+(Get-Random -Minimum 28 -Maximum 66)/10.0; $script:doubleBlink=$false }
  }
 }
 $lines = @('我在。慢慢来，一起把它做好。','投喂一个好点子，我来长出代码。','正在收集你散落的灵感。','今天也要给自己留一点空白。','摸摸收到！灵感 +1。','小小一团，随叫随到。','写累了就看看远处吧。')
 function Say([string]$message) {
+ $script:happyUntil=$script:clock.Elapsed.TotalSeconds+1.8
  $speech.Text = $message
  $bubble.Visibility = 'Visible'
  if (-not $Preview -and -not $script:quiet) {
@@ -229,6 +324,7 @@ if (-not $Preview -and -not $Smoke -and (Test-Path -LiteralPath $statePath)) {
 }
 Clamp-Position
 $pet.Add_MouseLeftButtonDown({
+ $script:wokeFromSleep=$script:action -eq 'sleep'
  Set-PetAction 'idle'
  $script:drag = $pet.PointToScreen($_.GetPosition($pet))
  $script:startLeft = $window.Left; $script:startTop = $window.Top; $script:moved = $false
@@ -238,6 +334,9 @@ $pet.Add_MouseLeftButtonDown({
  [void]$pet.CaptureMouse(); $_.Handled = $true
 })
 $pet.Add_MouseMove({
+ $local=$_.GetPosition($pet)
+ $script:lookX=[Math]::Max(-3.5,[Math]::Min(3.5,($local.X/[Math]::Max(1.0,$pet.ActualWidth)-0.5)*9))
+ $script:lookY=[Math]::Max(-2.0,[Math]::Min(2.0,($local.Y/[Math]::Max(1.0,$pet.ActualHeight)-0.5)*5))
  if ($null -eq $script:drag) { return }
  $p = $pet.PointToScreen($_.GetPosition($pet))
  $dpi = [Windows.PresentationSource]::FromVisual($window).CompositionTarget.TransformFromDevice
@@ -256,7 +355,10 @@ $pet.Add_MouseLeftButtonUp({
   if ($window.Top-$a.Top -lt 45) { $window.Top = $a.Top }
   if ($a.Bottom-$window.Top-$window.Height -lt 45) { $window.Top = $a.Bottom-$window.Height }
   Save-State
- } else { Say ($lines | Get-Random) }
+ } else {
+  if ($script:wokeFromSleep) { Set-PetAction 'stretch'; Say '唔，醒啦。伸个懒腰就来陪你。' }
+  else { Say ($lines | Get-Random) }
+ }
 })
 $pet.Add_LostMouseCapture({ $script:drag = $null; Bounce 1.06 0.94 })
 $bubble.Add_MouseLeftButtonUp({ $bubble.Visibility = 'Collapsed' })
@@ -270,6 +372,7 @@ Add-Item '散步一会儿' { Set-PetAction 'walk' }
 Add-Item '坐下陪我' { Set-PetAction 'sit' }
 Add-Item '躺下休息' { Set-PetAction 'sleep' }
 Add-Item '伸个懒腰' { Set-PetAction 'stretch' }
+Add-Item '挥手打招呼' { Set-PetAction 'wave' }
 Add-Item '开关随机待机动作' { $script:randomActions=-not $script:randomActions; Set-PetAction 'idle'; Save-State; Say $(if ($script:randomActions) {'我会自己散步，也会乖乖休息。'} else {'我就待在这里陪你。'}) }
 Add-Item '专注 25 分钟' { Set-PetAction 'idle'; $script:focusUntil = [DateTime]::Now.AddMinutes(25); Say '好，我陪你专注 25 分钟。' }
 Add-Item '结束专注' { $script:focusUntil = $null; $label.Text = '码团  ·  陪你写点东西'; Say '休息一下，伸个懒腰。' }
@@ -284,15 +387,19 @@ Add-Item '收起码团（退出）' { $window.Close() }
 $pet.ContextMenu = $menu
 $menu.FontFamily='Microsoft YaHei'; $menu.FontSize=14
 $menu.Add_Opened({ Set-PetAction 'idle' })
-$window.Add_MouseEnter({ if ($script:action -eq 'walk') { Set-PetAction 'idle' } })
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(33)
 $timer.Add_Tick({
  $script:tick++
  if ($Smoke) {
-  switch ($script:tick) { 1 {Set-PetAction 'walk'} 45 {Set-PetAction 'sit'} 90 {Set-PetAction 'sleep'} 135 {Set-PetAction 'stretch'} 180 {Set-PetAction 'idle'} 200 {$window.Close(); return} }
+  switch ($script:tick) {
+   1 {Set-PetAction 'walk'; $script:smokeOrigin=$window.Left}
+   80 {$script:smokeDistance=[Math]::Abs($window.Left-$script:smokeOrigin)}
+   90 {Set-PetAction 'sit'} 145 {Set-PetAction 'sleep'} 200 {Set-PetAction 'stretch'} 250 {Set-PetAction 'wave'}
+   300 {Set-PetAction 'idle'} 325 {$window.Close(); return}
+  }
  }
- if ($script:tick % 30 -eq 0) {
+ if ($script:tick % 30 -eq 0 -and -not $Smoke) {
   if ([DateTime]::Now -ge $script:nextRefresh) { Refresh-Usage }
   Show-Usage
  }
@@ -318,13 +425,22 @@ if ($Preview) {
  $window.FindName('WeekText').Text='一周  ·  剩余 48%'
  $window.FindName('WeekBar').Value=48
  $window.FindName('SyncText').Text='外观预览 · 示例数据'
- Apply-Pose (Get-PetPose $PreviewAction 3 12)
+ Apply-Pose (Get-PetPose $PreviewAction $PreviewAge 12)
+ Set-UsageMood @{name=$PreviewMood;remaining=$null;limiting=$null}
+ if ($PreviewMood -ne 'unknown') {
+  $sample=switch ($PreviewMood) { 'happy' {85} 'calm' {45} 'worried' {12} 'exhausted' {0} }
+  $window.FindName('FiveText').Text='5 小时  ·  剩余 '+$sample+'%'
+  $window.FindName('FiveBar').Value=$sample
+  $window.FindName('WeekText').Text='一周  ·  剩余 80%'
+  $window.FindName('WeekBar').Value=80
+ }
  $window.UpdateLayout()
  $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap(280,430,96,96,[Windows.Media.PixelFormats]::Pbgra32)
  $bmp.Render($window)
  $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder
  $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
  $previewName = $(if ($PreviewAction -eq 'idle') {'preview.png'} else {'preview-'+$PreviewAction+'.png'})
+ if ($PreviewMood -ne 'unknown') { $previewName='preview-mood-'+$PreviewMood+'.png' }
  $stream = [IO.File]::Create((Join-Path $PSScriptRoot $previewName))
  $encoder.Save($stream); $stream.Dispose(); $window.Close()
 } else {
@@ -332,4 +448,8 @@ if ($Preview) {
  $timer.Start()
  Say '你好，我是码团。点我摸摸，右键打开菜单。'
  [void]$window.ShowDialog()
+ if ($Smoke) {
+  if ($null -eq $script:smokeDistance -or $script:smokeDistance -lt 8) {throw 'Live walking did not move the desktop window'}
+  Write-Output ('PASS: live desktop displacement '+[Math]::Round($script:smokeDistance,1)+' px')
+ }
 }

@@ -3,3 +3,5 @@ usage.json
 usage.json.tmp
 *.log
 *.zip
+build/
+dist/

@@ -4,9 +4,19 @@
 
 ![码团外观，图中为示例数据](preview.png)
 
-## v1.1：码团会自己休息了
+## v1.2：表情、动作与 EXE
 
-空闲 14–28 秒后随机散步、坐下、侧躺打盹或伸懒腰，不连续重复同一个动作。散步约 8 秒、坐下 12 秒、打盹 18 秒、伸懒腰 5 秒；动作结束自然恢复站立。散步会在屏幕工作区内向左或向右走一小段，鼠标靠近即停下，点击可叫醒，拖动和打开菜单会停止当前动作。专注计时期间不会随机散步。
+空闲 12–24 秒后随机散步、坐下、侧躺打盹、伸懒腰或挥手，不连续重复同一个动作。散步约 8 秒、坐下 12 秒、打盹 18 秒、伸懒腰 5 秒。散步会让宠物和用量卡在主屏工作区内实际移动 90–170 像素，脚步跟随行进距离；点击、拖动或打开菜单可停止。修复 v1.1 位移进度被取整导致的原地踏步和跳跃。专注计时期间不会随机散步。
+
+坐姿使用独立的朝前脚掌与垂下的双手，先伸脚再落座，保持脸部比例。待机时有呼吸、轻微晃头、随机视线、偶尔连续眨眼；鼠标移到宠物上时目光跟随。睡醒会先伸懒腰，点击有笑脸和弹性反馈。
+
+### 额度小表情
+
+取五小时与一周剩余额度的较小值：≥50% 开心；20%–50% 之间平静；0%–20%（含 20%）担心；0% 委屈流泪。恢复额度后自动更新，悬停宠物可查看原因。数据超过 120 秒未同步、任一档缺失或已到重置时间时使用中性表情，缓存不会伪装成实时心情。这些阈值是宠物的表现规则，不是 OpenAI 官方额度等级。
+
+| 额度充足 | 快用完了 | 用完了 |
+| --- | --- | --- |
+| ![开心](preview-mood-happy.png) | ![担心](preview-mood-worried.png) | ![委屈](preview-mood-exhausted.png) |
 
 右键可以点播动作，也可以关闭随机待机。安静模式会暂停自动动作；手动点播动作会恢复灵动模式。
 
@@ -16,7 +26,9 @@
 | --- | --- |
 | ![坐下](preview-sit.png) | ![侧躺](preview-sleep.png) |
 
-Windows 10/11 桌面小宠物。下载仓库 ZIP 并解压，双击「启动码团.vbs」启动。界面使用系统自带的 Windows PowerShell 5.1 和 WPF。用量功能需要已安装 Codex 桌面版或 PATH 中的 codex.exe，并使用 ChatGPT 账户登录。
+Windows 10/11 桌面小宠物。推荐到 [Releases](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/latest) 下载 EXE 后双击运行，无命令行窗口。同一用户重复启动 EXE 不会重复创建宠物。EXE 将内置程序解压到 `%LOCALAPPDATA%\CodexUsagePet\1.2.0`，设置与用量缓存也保存在此处。退出后删除该目录与 EXE 即可移除。
+
+也可以下载源码 ZIP 并解压，双击「启动码团.vbs」启动。界面使用 Windows 自带的 PowerShell 5.1、.NET Framework 和 WPF。用量功能需要已安装 Codex 桌面版或 PATH 中的 codex.exe，并使用 ChatGPT 账户登录。EXE 内含宠物程序，不包含 Codex 本身。
 
 - 单击：摸摸、弹性回弹、随机台词。
 - 拖动：调整位置，靠近主屏工作区四边时吸附。
@@ -50,6 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\usage.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\behavior.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\mood.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Preview
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Preview -PreviewAction sleep
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Smoke
@@ -58,3 +71,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Smoke
 预览参数使用明确标注的示例数据，不发起用量查询。请保持 pet.ps1 为 UTF-8 BOM 编码，以兼容 Windows PowerShell 的中文文本。
 
 MIT License。欢迎改造自己的小宠物。
+
+### 构建 EXE
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+使用 Windows .NET Framework 自带的 C# 编译器。输出到 `dist/`，同时生成 SHA-256 校验文件。构建仅打包明确列出的程序、说明和许可证，不包含个人设置、用量缓存、密钥或开发日志。`launcher.cs` 为完整启动器源码；`--smoke` 可运行短时窗口与实际位移检查后自动退出。
