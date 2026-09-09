@@ -1,6 +1,7 @@
 ﻿param([switch]$Preview,[switch]$Smoke,[switch]$PreviewCompact,[switch]$PreviewSettings,[ValidateSet('idle','walk','sit','sleep','stretch','wave')][string]$PreviewAction='idle',[double]$PreviewAge=3,[ValidateSet('unknown','happy','calm','worried','exhausted')][string]$PreviewMood='unknown')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 . (Join-Path $PSScriptRoot 'behavior-core.ps1')
 . (Join-Path $PSScriptRoot 'usage-core.ps1')
 . (Join-Path $PSScriptRoot 'preferences-core.ps1')
@@ -468,7 +469,7 @@ $timer.Add_Tick({
    300 {Set-PetAction 'idle'}
    325 {$script:lastInteraction=[DateTime]::Now.AddMinutes(-10); $script:expandedUntil=[DateTime]::MinValue; $script:bubbleUntil=[DateTime]::MinValue}
    390 {if($script:compact -lt 0.99){throw ('Idle compaction did not finish: '+$script:compact+' action='+$script:action)}; Wake-Pet}
-   450 {if($script:compact -gt 0.01){throw 'Wake did not expand the pet'}; $window.Close(); return}
+   450 {if($script:compact -gt 0.01){throw 'Wake did not expand the pet'}; if(-not $script:tray.Visible){throw 'Tray icon is not visible'}; $script:trayExit.PerformClick(); return}
   }
  }
  if (($script:clock.Elapsed.TotalSeconds-$script:lastUsageCheck) -ge 1 -and -not $Smoke) {
@@ -484,7 +485,36 @@ $timer.Add_Tick({
   else { $label.Text = '专注陪伴  '+$remaining.ToString('mm\:ss') }
  }
 })
-$window.Add_Closed({ $timer.Stop(); if (-not $Preview -and -not $Smoke) { Save-State } })
+$script:tray=$null; $script:trayMenu=$null; $script:trayIcon=$null
+function Show-PetFromTray {
+ Set-PetAction 'idle'; Wake-Pet
+ $window.Show(); $window.WindowState='Normal'; Clamp-Position
+ [void]$window.Activate()
+}
+function Remove-PetTray {
+ if($null -ne $script:tray){$script:tray.Visible=$false; $script:tray.Dispose(); $script:tray=$null}
+ if($null -ne $script:trayMenu){$script:trayMenu.Dispose(); $script:trayMenu=$null}
+ if($null -ne $script:trayIcon){$script:trayIcon.Dispose(); $script:trayIcon=$null}
+}
+function Initialize-PetTray {
+ $script:tray=New-Object System.Windows.Forms.NotifyIcon
+ $iconPath=Join-Path $PSScriptRoot 'pet.ico'
+ $script:trayIcon=if(Test-Path $iconPath){New-Object System.Drawing.Icon($iconPath)}else{[System.Drawing.SystemIcons]::Application.Clone()}
+ $script:tray.Icon=$script:trayIcon
+ $script:tray.Text='码团 · 右键设置或退出'
+ $script:trayMenu=New-Object System.Windows.Forms.ContextMenuStrip
+ $show=$script:trayMenu.Items.Add('显示码团')
+ $show.Add_Click({Show-PetFromTray})
+ $settings=$script:trayMenu.Items.Add('设置…')
+ $settings.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Show-PetSettings})})
+ [void]$script:trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+ $script:trayExit=$script:trayMenu.Items.Add('退出码团')
+ $script:trayExit.Add_Click({if($null -ne $script:settingsWindow){$script:settingsWindow.Close()}; $window.Close()})
+ $script:tray.ContextMenuStrip=$script:trayMenu
+ $script:tray.Add_MouseDoubleClick({if($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){Show-PetFromTray}})
+ $script:tray.Visible=$true
+}
+$window.Add_Closed({ $timer.Stop(); Remove-PetTray; if (-not $Preview -and -not $Smoke) { Save-State } })
 if ($Preview) {
  Resize-Pet 0.8
  Resize-Pet 1.3
@@ -523,9 +553,10 @@ if ($Preview) {
  Refresh-Usage
  $timer.Start()
  Say '你好，我是码团。点我摸摸，右键打开菜单。'
- [void]$window.ShowDialog()
+ try {Initialize-PetTray; [void]$window.ShowDialog()} finally {$timer.Stop(); Remove-PetTray}
  if ($Smoke) {
   if ($null -eq $script:smokeDistance -or $script:smokeDistance -lt 8) {throw 'Live walking did not move the desktop window'}
-  Write-Output ('PASS: live desktop displacement '+[Math]::Round($script:smokeDistance,1)+' px; idle compaction and wake expansion')
+  if($null -ne $script:tray){throw 'Tray icon was not disposed on exit'}
+  Write-Output ('PASS: live desktop displacement '+[Math]::Round($script:smokeDistance,1)+' px; idle compaction, wake expansion and tray menu exit')
  }
 }
