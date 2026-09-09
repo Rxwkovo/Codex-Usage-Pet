@@ -8,3 +8,6 @@ jobs:
       - name: Verify usage classification and missing data
         shell: powershell
         run: ./tests/usage.tests.ps1
+      - name: Verify idle poses and walking boundaries
+        shell: powershell
+        run: ./tests/behavior.tests.ps1
