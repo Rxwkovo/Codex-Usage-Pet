@@ -23,23 +23,11 @@ function Get-PreferenceSchema {
  @('expandHold','缩团','展开后至少保持（秒）','number',8,1,120),
  @('compactTransition','缩团','缩团 / 展开过渡（秒）','number',1.2,0.2,5),
  @('wakeOnUsage','缩团','额度变化时展开','bool',1,0,1),
- @('transition','动效','动作切换融合（秒）','number',0.9,0.15,3),
+ @('spriteTransition','动效','手绘动作切换淡入（秒）','number',0.12,0,0.5),
  @('poseEase','动效','动作起身 / 收尾缓动（秒）','number',1.5,0.3,3),
- @('motionAmount','动效','动作幅度倍率','number',1,0.2,1.5),
  @('strideLength','动效','每步距离（像素）','number',26,10,80),
- @('strideLift','动效','走路抬脚高度（像素）','number',5,1,12),
- @('walkBob','动效','走路身体起伏（像素）','number',3.2,0,8),
- @('walkRoll','动效','走路摇摆角度','number',2.5,0,8),
- @('wavePeriod','动效','挥手周期（秒）','number',0.7,0.3,3),
- @('sleepBreathPeriod','动效','休息呼吸周期（秒）','number',4.2,1,12),
- @('stretchSwayPeriod','动效','伸懒腰摇摆周期（秒）','number',4.2,1,12),
  @('breathAmount','动效','待机呼吸幅度倍率','number',1,0,2),
  @('breathPeriod','动效','呼吸周期（秒）','number',3.8,1,12),
- @('idleSwayPeriod','动效','待机摇摆周期（秒）','number',11.85,2,30),
- @('idleArmPeriod','动效','待机手臂周期（秒）','number',5.7,1,20),
- @('leafAmount','动效','叶片摆动幅度（度）','number',3,0,10),
- @('leafPeriod','动效','叶片摆动周期（秒）','number',3.7,1,15),
- @('leafResponse','动效','叶片跟随速度','number',5,1,20),
  @('fps','动效','动画帧率','number',30,15,60),
  @('blinkMin','眼神','眨眼最短间隔（秒）','number',2.8,1,30),
  @('blinkMax','眼神','眨眼最长间隔（秒）','number',6.5,1,30),
@@ -47,11 +35,6 @@ function Get-PreferenceSchema {
  @('blinkDurationMax','眼神','闭眼最长时长（毫秒）','number',110,40,400),
  @('doubleBlinkChance','眼神','连续眨眼概率（%）','number',16.7,0,100),
  @('doubleBlinkGap','眼神','连续眨眼间隔（秒）','number',0.3,0.1,2),
- @('lookMin','眼神','随机视线最短间隔（秒）','number',3,1,60),
- @('lookMax','眼神','随机视线最长间隔（秒）','number',6,1,60),
- @('lookX','眼神','随机左右视线幅度','number',2.4,0,4),
- @('lookY','眼神','随机上下视线幅度','number',1.2,0,3),
- @('gazeResponse','眼神','视线跟随速度','number',7,1,25),
  @('walkRightChance','动作','散步优先向右概率（%）','number',50,0,100),
  @('scale','外观','正常大小倍率','number',1,0.7,1.5),
  @('fontSize','外观','额度文字大小','number',15,12,22),
@@ -69,8 +52,7 @@ function Get-PreferenceSchema {
  @('staleSeconds','额度','额度过期判定（秒）','number',120,60,3600),
  @('happyThreshold','额度','开心阈值（剩余 %）','number',50,1,100),
  @('worriedThreshold','额度','担忧阈值（剩余 %）','number',20,0,99),
- @('barTransition','额度','额度条过渡（秒）','number',0.7,0.1,3),
- @('moodTransition','额度','表情淡入（秒）','number',0.35,0.1,2)
+ @('barTransition','额度','额度条过渡（秒）','number',0.7,0.1,3)
  ) | ForEach-Object { @{key=$_[0];group=$_[1];label=$_[2];type=$_[3];default=$_[4];min=$_[5];max=$_[6]} }
 }
 function Get-DefaultPreferences {
@@ -88,7 +70,7 @@ function Test-Preferences($p) {
    $p[$s.key]=$n
   }
  }
- foreach($pair in @(@('actionMin','actionMax'),@('walkMin','walkMax'),@('blinkMin','blinkMax'),@('blinkDurationMin','blinkDurationMax'),@('lookMin','lookMax'))) {
+ foreach($pair in @(@('actionMin','actionMax'),@('walkMin','walkMax'),@('blinkMin','blinkMax'),@('blinkDurationMin','blinkDurationMax'))) {
   if([double]$p[$pair[0]] -gt [double]$p[$pair[1]]) {return '最短间隔 / 距离不能大于对应的最长值。'}
  }
  if($p.happyThreshold -le $p.worriedThreshold) {return '开心阈值必须大于担忧阈值。'}

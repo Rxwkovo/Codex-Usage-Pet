@@ -8,8 +8,8 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Codex Usage Pet")]
 [assembly: AssemblyDescription("Animated desktop companion with Codex quota expressions")]
-[assembly: AssemblyVersion("1.3.1.0")]
-[assembly: AssemblyFileVersion("1.3.1.0")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
 internal static class Launcher
 {
     [STAThread]
@@ -22,9 +22,9 @@ internal static class Launcher
             if (!first) return 0;
             try
             {
-                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "1.3.1");
+                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "2.0.0");
                 Directory.CreateDirectory(root);
-                string previous = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "1.3.0");
+                string previous = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "1.3.1");
                 if (!smoke)
                 {
                     foreach (string name in new[] { "settings.json", "preferences.json" })
@@ -41,6 +41,8 @@ internal static class Launcher
                     {
                         string target = Path.GetFullPath(Path.Combine(root, entry.FullName));
                         if (!target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Invalid package path.");
+                        if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(target); continue; }
+                        Directory.CreateDirectory(Path.GetDirectoryName(target));
                         using (var input = entry.Open())
                         using (var output = File.Create(target)) input.CopyTo(output);
                     }

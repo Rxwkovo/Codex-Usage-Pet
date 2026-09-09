@@ -17,6 +17,9 @@ jobs:
       - name: Verify preferences and interrupted transitions
         shell: powershell
         run: ./tests/preferences.tests.ps1
+      - name: Verify raster frames and transparency
+        shell: powershell
+        run: ./tests/sprite.tests.ps1
       - name: Build Windows executable
         shell: powershell
         run: ./build.ps1
