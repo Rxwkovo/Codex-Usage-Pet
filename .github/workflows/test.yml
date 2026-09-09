@@ -1,0 +1,10 @@
+name: Windows checks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify usage classification and missing data
+        shell: powershell
+        run: ./tests/usage.tests.ps1

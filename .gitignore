@@ -1,0 +1,5 @@
+settings.json
+usage.json
+usage.json.tmp
+*.log
+*.zip
