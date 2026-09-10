@@ -9,12 +9,16 @@ using System.Windows.Media.Imaging;
 // paper background, aligns cells and blends image frames; it draws no character geometry.
 public sealed class PetSpriteView : FrameworkElement
 {
-    const int W=220,H=210,Stride=W*4;
+    const int Density=2,W=220*Density,H=210*Density,Stride=W*4;
+    public int PixelWidth {get{return W;}}
+    public int PixelHeight {get{return H;}}
+    public PetSpriteView(){RenderOptions.SetBitmapScalingMode(this,BitmapScalingMode.HighQuality);}
     readonly Dictionary<string,byte[][]> sheets=new Dictionary<string,byte[][]>();
     readonly Dictionary<string,ScreenRegion[]> screens=new Dictionary<string,ScreenRegion[]>();
     readonly Dictionary<string,ScreenRegion[]> faceRegions=new Dictionary<string,ScreenRegion[]>();
     readonly Dictionary<string,byte[][]> faceArt=new Dictionary<string,byte[][]>();
     readonly Dictionary<string,byte[]> composed=new Dictionary<string,byte[]>();
+    readonly Queue<string> compositionOrder=new Queue<string>();
     int expression;
     public void SetExpression(int mood,bool closed){expression=Math.Max(0,Math.Min(3,mood))+(closed?4:0);}
     public int GetFrameCount(string key){return sheets[key].Length;}
@@ -54,17 +58,28 @@ public sealed class PetSpriteView : FrameworkElement
         public double cx,cy,c,s,left=1e6,right=-1e6,top=1e6,bottom=-1e6;
         public ScreenRegion(byte[] p)
         {
+            // A resting face may touch the body's ink outline. Find the thick
+            // panel core first so connected thin outlines cannot become a face.
+            var core=new bool[W*H];
+            int radius=2*Density;
+            for(int y=radius;y<H-radius;y++)for(int x=radius;x<W-radius;x++){
+                bool solid=true;for(int dy=-radius;dy<=radius&&solid;dy++)for(int dx=-radius;dx<=radius;dx++)if(!Dark(p,(y+dy)*W+x+dx)){solid=false;break;}
+                core[y*W+x]=solid;
+            }
             var tags=new int[W*H];var queue=new int[W*H];int tag=0,best=0,size=0;
             for(int start=0;start<tags.Length;start++){
-                if(tags[start]!=0||!Dark(p,start))continue;
+                if(tags[start]!=0||!core[start])continue;
                 int begin=0,end=1;queue[0]=start;tags[start]=++tag;
-                while(begin<end){int n=queue[begin++],x=n%W,y=n/W;for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){int xx=x+dx,yy=y+dy;if(xx<0||xx>=W||yy<0||yy>=H)continue;int k=yy*W+xx;if(tags[k]==0&&Dark(p,k)){tags[k]=tag;queue[end++]=k;}}}
+                while(begin<end){int n=queue[begin++],x=n%W,y=n/W;for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){int xx=x+dx,yy=y+dy;if(xx<0||xx>=W||yy<0||yy>=H)continue;int k=yy*W+xx;if(tags[k]==0&&core[k]){tags[k]=tag;queue[end++]=k;}}}
                 if(end>size){size=end;best=tag;}
             }
             if(size<300)throw new InvalidDataException("Cannot locate raster face screen");
+            var panel=new bool[W*H];
+            for(int n=0;n<tags.Length;n++)if(tags[n]==best){int x=n%W,y=n/W;for(int dy=-radius;dy<=radius;dy++)for(int dx=-radius;dx<=radius;dx++){int xx=x+dx,yy=y+dy;if(xx>=0&&xx<W&&yy>=0&&yy<H&&Dark(p,yy*W+xx))panel[yy*W+xx]=true;}}
+            FillPanelHull(panel);
             // Flood the exterior, filling eyes/mouth holes inside the screen.
             var exterior=new bool[W*H];int head=0,tail=1;queue[0]=0;exterior[0]=true;
-            while(head<tail){int n=queue[head++],x=n%W,y=n/W;foreach(int d in new[]{-1,1,-W,W}){int k=n+d;if(k<0||k>=W*H||(d==-1&&x==0)||(d==1&&x==W-1)||exterior[k]||tags[k]==best)continue;exterior[k]=true;queue[tail++]=k;}}
+            while(head<tail){int n=queue[head++],x=n%W,y=n/W;foreach(int d in new[]{-1,1,-W,W}){int k=n+d;if(k<0||k>=W*H||(d==-1&&x==0)||(d==1&&x==W-1)||exterior[k]||panel[k])continue;exterior[k]=true;queue[tail++]=k;}}
             int count=0;for(int i=0;i<mask.Length;i++)if(!exterior[i]){mask[i]=true;cx+=i%W;cy+=i/W;count++;}
             cx/=count;cy/=count;double xxSum=0,yySum=0,xySum=0;
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy;xxSum+=x*x;yySum+=y*y;xySum+=x*y;}
@@ -72,6 +87,16 @@ public sealed class PetSpriteView : FrameworkElement
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy,u=x*c+y*s,v=-x*s+y*c;left=Math.Min(left,u);right=Math.Max(right,u);top=Math.Min(top,v);bottom=Math.Max(bottom,v);}
         }
         static bool Dark(byte[] p,int i){i*=4;return p[i+3]>240&&p[i]<90&&p[i+1]<105&&p[i+2]<65;}
+        static double Cross(Point a,Point b,Point c){return (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);}
+        static void FillPanelHull(bool[] panel){
+            var points=new List<Point>();for(int x=0;x<W;x++)for(int y=0;y<H;y++)if(panel[y*W+x])points.Add(new Point(x,y));
+            var hull=new List<Point>();foreach(var pt in points){while(hull.Count>=2&&Cross(hull[hull.Count-2],hull[hull.Count-1],pt)<=0)hull.RemoveAt(hull.Count-1);hull.Add(pt);}
+            int lower=hull.Count;for(int i=points.Count-2;i>=0;i--){var pt=points[i];while(hull.Count>lower&&Cross(hull[hull.Count-2],hull[hull.Count-1],pt)<=0)hull.RemoveAt(hull.Count-1);hull.Add(pt);}
+            for(int y=0;y<H;y++){double left=W,right=-1,scan=y+.001;
+                for(int i=0;i<hull.Count-1;i++){var a=hull[i];var b=hull[i+1];if((a.Y>scan)==(b.Y>scan))continue;double x=a.X+(scan-a.Y)*(b.X-a.X)/(b.Y-a.Y);left=Math.Min(left,x);right=Math.Max(right,x);}
+                for(int x=Math.Max(0,(int)Math.Ceiling(left));x<=Math.Min(W-1,(int)Math.Floor(right));x++)panel[y*W+x]=true;
+            }
+        }
     }
     byte[] Compose(string key,int frame)
     {
@@ -90,7 +115,8 @@ public sealed class PetSpriteView : FrameworkElement
                 result[i*4+k]=(byte)Math.Min(result[i*4+3],color);
             }
         }
-        composed.Add(id,result);return result;
+        while(compositionOrder.Count>=48)composed.Remove(compositionOrder.Dequeue());
+        composed.Add(id,result);compositionOrder.Enqueue(id);return result;
     }
     static byte[][] LoadSheet(string path,int rows=2)
     {
@@ -139,15 +165,16 @@ public sealed class PetSpriteView : FrameworkElement
                 int srcOffset=((oy+y)*sw+ox+x)*4;
                 for(int k=0;k<3;k++)pixels[n*4+k]=data[srcOffset+k];pixels[n*4+3]=255;
             }
-            if(i==0)scale=Math.Min(180.0/(maxY-minY+1),188.0/(maxX-minX+1));
+            if(i==0)scale=Density*Math.Min(180.0/(maxY-minY+1),188.0/(maxX-minX+1));
             var cell=BitmapSource.Create(cw,ch,96,96,PixelFormats.Pbgra32,null,pixels,cw*4);cell.Freeze();
             var visual=new DrawingVisual();
+            RenderOptions.SetBitmapScalingMode(visual,BitmapScalingMode.HighQuality);
             using(var dc=visual.RenderOpen())
             {
                 // First cell fixes scale for the entire action; all cells share a foot anchor.
                 bool flip=Path.GetFileNameWithoutExtension(path)=="walk" && i>=4;
                 if(flip)dc.PushTransform(new ScaleTransform(-1,1,W/2.0,0));
-                dc.DrawImage(cell,new Rect(W/2.0-(minX+maxX+1)/2.0*scale,198-(maxY+1)*scale,cw*scale,ch*scale));
+                dc.DrawImage(cell,new Rect(W/2.0-(minX+maxX+1)/2.0*scale,198*Density-(maxY+1)*scale,cw*scale,ch*scale));
                 if(flip)dc.Pop();
             }
             var rendered=new RenderTargetBitmap(W,H,96,96,PixelFormats.Pbgra32);rendered.Render(visual);
@@ -175,6 +202,6 @@ public sealed class PetSpriteView : FrameworkElement
     {
         base.OnRender(dc);
         dc.PushTransform(new TranslateTransform(0,-breath));
-        dc.DrawImage(output,new Rect(0,0,W,H));dc.Pop();
+        dc.DrawImage(output,new Rect(0,0,220,210));dc.Pop();
     }
 }
