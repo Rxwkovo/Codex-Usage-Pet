@@ -8,3 +8,8 @@ dist/
 
 preferences.json
 art-v2/
+android/.gradle/
+android/local.properties
+*.jks
+*.keystore
+bridge/__pycache__/

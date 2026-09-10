@@ -1,5 +1,7 @@
 # 码团 · Codex Usage Pet
 
+Android 预览版已新增：App + 悬浮桌宠、电脑局域网额度同步。安装、权限和配对说明见 [android/README.md](android/README.md)。Windows 版本继续使用下方下载与操作方式。
+
 薄荷色的桌面小伙伴，分别显示 Codex **五小时与一周剩余额度**。
 
 ![手绘风格码团，额度为演示数据](preview.png)
