@@ -173,11 +173,11 @@ function Update-Behavior {
   if(-not $script:doubleBlink -and (Get-RandomRange 0 100) -lt $script:preferences.doubleBlinkChance){$script:nextBlink=$t+$script:preferences.doubleBlinkGap;$script:doubleBlink=$true}
   else{$script:nextBlink=$t+(Get-RandomRange $script:preferences.blinkMin $script:preferences.blinkMax);$script:doubleBlink=$false}
  }
- if($sample.key -eq 'moods'){
-  $sample.alternate=[int]$sample.frame+4
-  $blinkAge=$t-$script:blinkStarted
-  if($blinkAge -ge 0 -and $blinkAge -lt 2*$script:blinkLength){$sample.mix=[Math]::Sin($blinkAge/(2*$script:blinkLength)*[Math]::PI)}
- }
+ $expression=switch($script:mood){'happy'{1}'worried'{2}'exhausted'{3}default{0}}
+ $blinkAge=$t-$script:blinkStarted
+ $closed=($blinkAge -ge 0 -and $blinkAge -lt 2*$script:blinkLength)
+ if($script:action -eq 'sleep' -and $sample.frame -gt 5){$closed=$true}
+ $script:sprite.SetExpression($expression,$closed)
  $breath=0.0
  if(-not $script:quiet -and $script:action -eq 'idle'){$breath=[Math]::Sin($t*2*[Math]::PI/$script:preferences.breathPeriod)*$script:preferences.breathAmount}
  $script:sprite.SetFrame($sample.key,$sample.frame,$sample.mirror,$t,$script:preferences.spriteTransition,$breath,$sample.alternate,$sample.mix)
@@ -419,6 +419,8 @@ if ($Preview) {
  }
  if($PreviewCompact){$script:compact=1; Set-CompactVisual; $bubble.Visibility='Collapsed'}
  $sample=Get-SpriteSample $PreviewAction $PreviewAge 12 140 0.4 $script:compact $PreviewMood $false $script:preferences
+ $expression=switch($PreviewMood){'happy'{1}'worried'{2}'exhausted'{3}default{0}}
+ $script:sprite.SetExpression($expression,($PreviewAction -eq 'sleep'))
  $script:sprite.SetFrame($sample.key,$sample.frame,$sample.mirror,0,0,0,-1,0)
  if($PreviewSettings){Show-PetSettings}
  $window.UpdateLayout()
