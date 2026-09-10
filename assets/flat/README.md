@@ -17,3 +17,12 @@ Common: Same mint sprout code mascot, flat 2D cartoon cel, gently imperfect dark
 - Moods: top row neutral / happy / worried / exhausted; bottom row corresponding closed-eye faces. Same standing body in all cells.
 
 Drawn frames play as clear animation cels; a short configurable dissolve joins different actions. Long adjacent-frame dissolves are deliberately avoided because they produce doubled eyes and outlines. Small line variations remain part of the generated art. Quota expressions and blinks apply while standing idle; resting and gesturing use their drawn expressions and return to the current quota expression when finished.
+
+
+## v2.1 additions (2026-09-11)
+
+Wave and stretch now use four-column, four-row sheets (16 complete cels). Other motion sheets retain eight cels. `action-moods.png` and `action-blinks.png` contain four mood columns (happy, calm, worried, exhausted) and six action rows (walk, sit, sleep, stretch, rejected compact row, wave). The incorrect compact row is unused; `compact-moods.png` supplies four moods and their closed-eye counterparts in two rows. The player maps drawn screen pixels to each full-body cel, without a limb rig. Face-only results are cached; blinking does not crossfade the whole body.
+
+Generation prompts: preserve the approved mint mascot's complete silhouette, flat paper texture, dark outlines, two sprout leaves, face screen and belly code mark. Draw 16 chronological gesture cels with gradual anticipation, raised hands, peak pose and settling; separately draw each action's four quota emotions and corresponding closed eyelids. Compact must remain a tucked round ball with no visible feet. All inputs were original approved artwork. White background is keyed only around the silhouette, keeping enclosed highlights opaque.
+
+These additions supersede the old statement above that expressions apply only in standing idle. Runtime checks cover all 576 full-body-frame / mood / blink combinations. Only wave and stretch gain body frames in this release.

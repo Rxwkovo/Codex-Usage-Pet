@@ -20,6 +20,9 @@ jobs:
       - name: Verify raster frames and transparency
         shell: powershell
         run: ./tests/sprite.tests.ps1
+      - name: Verify hand-drawn action expressions
+        shell: powershell
+        run: ./tests/handdrawn.tests.ps1
       - name: Build Windows executable
         shell: powershell
         run: ./build.ps1
