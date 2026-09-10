@@ -6,6 +6,8 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
@@ -31,7 +33,26 @@ class MainActivity:Activity() {
     private val ink=Color.rgb(26,64,54)
     private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
     private fun text(value:String,size:Float=15f,bold:Boolean=false)=TextView(this).apply{text=value;textSize=size;setTextColor(ink);if(bold)typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);setPadding(0,dp(5),0,dp(5))}
-    private fun button(label:String,fn:()->Unit)=Button(this).apply{text=label;isAllCaps=false;textSize=14f;setTextColor(ink);setOnClickListener{fn()}}
+    private fun button(label:String,primary:Boolean=false,fn:()->Unit)=object:Button(this){
+        override fun onTouchEvent(event:MotionEvent):Boolean{
+            when(event.actionMasked){
+                MotionEvent.ACTION_DOWN->animate().scaleX(0.97f).scaleY(0.97f).setDuration(100).start()
+                MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->animate().scaleX(1f).scaleY(1f).setDuration(180).start()
+            }
+            return super.onTouchEvent(event)
+        }
+    }.apply{
+        text=label;isAllCaps=false;textSize=14f;typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
+        setTextColor(if(primary)Color.WHITE else ink)
+        backgroundTintList=null;stateListAnimator=null;elevation=0f
+        minimumWidth=0;minWidth=0;minimumHeight=dp(46);minHeight=dp(46)
+        setPadding(dp(10),dp(10),dp(10),dp(10))
+        val shape=GradientDrawable().apply{setColor(if(primary)Color.rgb(30,125,101) else Color.rgb(229,243,235));cornerRadius=dp(18).toFloat()}
+        background=RippleDrawable(ColorStateList.valueOf(Color.argb(38,32,110,86)),shape,null)
+        layoutParams=LinearLayout.LayoutParams(-1,dp(48)).apply{topMargin=dp(6);bottomMargin=dp(6)}
+        setOnClickListener{fn()}
+    }
+    private fun chipParams()=LinearLayout.LayoutParams(0,dp(46),1f).apply{setMargins(dp(3),dp(5),dp(3),dp(5))}
     private fun card():LinearLayout=LinearLayout(this).apply{
         orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(14),dp(18),dp(14))
         background=GradientDrawable().apply{setColor(Color.WHITE);cornerRadius=dp(22).toFloat();setStroke(dp(1),Color.rgb(220,232,224))}
@@ -51,15 +72,15 @@ class MainActivity:Activity() {
         quota.addView(five);quota.addView(week);quota.addView(updated)
         quota.addView(button("立即同步"){store.refresh()})
         val live=card();live.addView(text("陪伴模式",20f,true))
-        overlay=button("开启悬浮码团"){toggleOverlay()};live.addView(overlay)
+        overlay=button("开启悬浮码团",true){toggleOverlay()};live.addView(overlay)
         live.addView(text("点击摸摸 · 拖动移动 · 长按打开 App\n通知栏可以随时收起。熄屏时暂停动画。",13f))
         val row=LinearLayout(this);live.addView(row)
-        listOf("walk" to "走走","sit" to "坐下","sleep" to "休息").forEach{(key,label)->row.addView(button(label){playAction(key)},LinearLayout.LayoutParams(0,-2,1f))}
+        listOf("walk" to "走走","sit" to "坐下","sleep" to "休息").forEach{(key,label)->row.addView(button(label){playAction(key)},chipParams())}
         val row2=LinearLayout(this);live.addView(row2)
-        listOf("stretch" to "伸展","wave" to "招手","compact" to "缩团").forEach{(key,label)->row2.addView(button(label){playAction(key)},LinearLayout.LayoutParams(0,-2,1f))}
+        listOf("stretch" to "伸展","wave" to "招手","compact" to "缩团").forEach{(key,label)->row2.addView(button(label){playAction(key)},chipParams())}
         val connection=card();connection.addView(text("连接电脑",20f,true))
         connection.addView(text("在电脑启动同步端，手机与电脑连接同一 Wi-Fi。首次配对支持粘贴配对码或导入二维码图片。",14f))
-        connection.addView(button("输入配对码"){pairDialog()})
+        connection.addView(button("输入配对码",true){pairDialog()})
         connection.addView(button("导入配对二维码"){startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41)})
         connection.addView(button("解除配对"){AlertDialog.Builder(this).setMessage("解除与电脑的连接并清除缓存？").setNegativeButton("取消",null).setPositiveButton("解除"){_,_->store.forget()}.show()})
         val options=card();options.addView(text("按你的节奏",20f,true))
@@ -69,8 +90,8 @@ class MainActivity:Activity() {
         options.addView(SeekBar(this).apply{max=80;progress=store.prefs.getInt("size",150)-110;setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,user:Boolean){if(user)store.prefs.edit().putInt("size",110+p).apply()};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})})
         options.addView(Switch(this).apply{text="演示表情（不代表真实额度）";setTextColor(ink);isChecked=store.demo;setOnCheckedChangeListener{_,v->store.setDemo(v)}})
         val moods=LinearLayout(this);options.addView(moods)
-        listOf("平静","开心","担忧","难过").forEachIndexed{i,label->moods.addView(button(label){store.demoMood=i;store.setDemo(true);pet.action("idle")},LinearLayout.LayoutParams(0,-2,1f))}
-        column.addView(text("码团 Android 0.1 · 开源预览版\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
+        listOf("平静","开心","担忧","难过").forEachIndexed{i,label->moods.addView(button(label){store.demoMood=i;store.setDemo(true);pet.action("idle")},chipParams())}
+        column.addView(text("码团 Android 0.1.1 · 开源预览版\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
         render()
     }
     private fun render(){
