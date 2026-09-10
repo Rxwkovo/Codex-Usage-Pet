@@ -39,7 +39,7 @@ class PetView @JvmOverloads constructor(context:Context, val floating:Boolean=fa
             val dx=motion.step(dt,23.0).toFloat()
             if(floating)moveWindow?.invoke(dx*resources.displayMetrics.density) else {
                 localX+=dx
-                val bound=(width*0.28f).coerceAtLeast(0f)
+                val bound=((width-min(width,height))/2f).coerceAtLeast(0f)
                 if(abs(localX)>bound){localX=localX.coerceIn(-bound,bound);motion.facingLeft=!motion.facingLeft}
             }
         }
