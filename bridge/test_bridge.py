@@ -7,9 +7,14 @@ import ssl
 import urllib.request
 import urllib.error
 from pathlib import Path
-from bridge import Bridge, certificate, make_server, sanitize
+from bridge import Bridge, certificate, make_server, sanitize, is_lan_ip
 
 class BridgeTests(unittest.TestCase):
+    def test_lan_addresses_exclude_loopback_stale_link_local_and_public(self):
+        for host in ("192.168.3.44", "10.0.0.1", "172.16.1.5"):
+            self.assertTrue(is_lan_ip(host))
+        for host in ("127.0.0.1", "169.254.1.5", "8.8.8.8", "0.0.0.0", "::1", "bad"):
+            self.assertFalse(is_lan_ip(host))
     def test_whitelist_and_staleness(self):
         data={"status":"ok","updatedAt":int(time.time()),"secret":"DO NOT SEND","fiveHour":{"remaining":75,"resetsAt":int(time.time())+600},"weekly":{"remaining":5,"resetsAt":int(time.time())+600}}
         self.assertEqual(sanitize(data)["status"],"ok")

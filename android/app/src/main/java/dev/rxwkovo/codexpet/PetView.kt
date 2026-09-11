@@ -26,7 +26,13 @@ class PetView @JvmOverloads constructor(context:Context, val floating:Boolean=fa
     private var blinkAt=SystemClock.uptimeMillis()+3000
     private var localX=0f
     private var downX=0f;private var downY=0f;private var prevX=0f;private var prevY=0f;private var downAt=0L;private var dragged=false
-    private val frames:Map<String,List<Bitmap>> by lazy {listOf("moods","walk","sit","sleep","stretch","wave","compact").associateWith {k->(0..7).map{i->context.assets.open("pet/${k}_$i.png").use{BitmapFactory.decodeStream(it)}}}}
+    // Bound decoded HD images instead of retaining every action/expression (~370 MB).
+    private val frames=object:android.util.LruCache<String,Bitmap>(12*1024*1024){
+        override fun sizeOf(key:String,value:Bitmap)=value.allocationByteCount
+    }
+    private fun frame(name:String):Bitmap=frames.get(name)?:context.assets.open("pet/$name.png").use{
+        BitmapFactory.decodeStream(it)!!.also{bitmap->frames.put(name,bitmap)}
+    }
     private val tick=object:Runnable{override fun run(){if(!active)return;update();invalidate();postDelayed(this,if(motion.action=="compact")100 else 33)}}
     init {isClickable=true;contentDescription="码团，点击互动，拖动移动，长按打开主界面"}
     fun start(){if(active)return;active=true;last=SystemClock.uptimeMillis();post(tick)}
@@ -50,14 +56,21 @@ class PetView @JvmOverloads constructor(context:Context, val floating:Boolean=fa
     override fun onDraw(canvas:Canvas){
         super.onDraw(canvas)
         val now=SystemClock.uptimeMillis()
-        val sample=motion.sample(now,store.mood(),now in blinkAt..blinkAt+160)
-        val frame=frames.getValue(sample.first)[sample.second]
-        val key=sample.first+if(sample.first=="moods")store.mood() else ""
+        motion.stretchHoldPercent=store.prefs.getInt("stretchHold",18)
+        val mood=store.mood()
+        val blink=now in blinkAt..blinkAt+160
+        val sample=motion.sample(now,mood,blink)
+        val expression=mood+if(blink || (sample.first=="sleep" && sample.second>=6))4 else 0
+        val name="${sample.first}_${sample.second}"+if(sample.first=="moods")"" else "_$expression"
+        val frame=frame(name)
+        val key=sample.first+mood
         if(key!=lastKey){previous=shown;transitionAt=now;lastKey=key}
         shown=frame
         val compact=motion.action=="compact"
         val factor=if(compact)0.62f else 1f
-        val size=min(width.toFloat(),height.toFloat())*factor
+        // Keep the quota badge above the full stretch/leaf silhouette.
+        val availableHeight=height-if(floating && !compact)26*resources.displayMetrics.density else 0f
+        val size=min(width.toFloat(),availableHeight)*factor
         val left=(width-size)/2+(if(floating)0f else localX)
         val top=height-size-abs(sin(now/850.0)).toFloat()*2f
         canvas.save()

@@ -9,6 +9,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import org.json.JSONObject
 import java.net.URL
+import java.net.Proxy
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
@@ -38,6 +39,31 @@ class PetStore(private val context: Context) {
     var demoMood=1
     val listeners=mutableSetOf<()->Unit>()
     var paired=prefs.contains("pairing"); private set
+    val connectionAddress:String get()=try{URL(JSONObject(unseal(prefs.getString("pairing",null)!!)).getString("url")).let{
+        if(it.host=="127.0.0.1" || it.host=="localhost")"USB 测试连接 · 拔线会断开，请切换无线地址"
+        else "电脑地址：${it.host}:${if(it.port<0)443 else it.port}"
+    }}catch(e:Exception){"尚未配对"}
+    private class SyncHttpException(val status:Int):Exception()
+    private fun connectionError(e:Exception)=when(e){
+        is SyncHttpException -> if(e.status==401 || e.status==403)"配对已失效或过期，请导入电脑的新配对码" else "电脑同步端返回错误 ${e.status}"
+        is SSLException -> "电脑身份校验失败，请确认同步端并重新配对"
+        else -> "无法连接电脑：请确认同步端已启动、无线地址正确，并允许其通过防火墙"
+    }
+    fun switchAddress(address:String,done:(String?)->Unit){
+        if(inFlight){done("正在同步，请稍后重试");return}
+        val endpoint=try{WirelessEndpoint.parse(address)}catch(e:Exception){done("请输入电脑的局域网 IPv4，例如 192.168.3.44:47831");return}
+        if(!paired){done("请先导入电脑配对码");return}
+        inFlight=true;val ticket=++generation
+        executor.execute{
+            try{
+                val spec=JSONObject(unseal(prefs.getString("pairing",null)!!)).put("url",endpoint)
+                val raw=request(spec,"/usage",spec.getString("token"),false)
+                val parsed=decode(raw)?:error("Invalid quota")
+                val encrypted=seal(spec.toString())
+                main.post{inFlight=false;if(ticket==generation){prefs.edit().putString("pairing",encrypted).putString("snapshot",raw).apply();usage=parsed;message="已切换无线连接";done(null);changed();refresh()}}
+            }catch(e:Exception){main.post{inFlight=false;if(ticket==generation){message=connectionError(e)+"；原连接已保留";done(message);changed()}}}
+        }
+    }
     private val ticker=object:Runnable { override fun run() { if(clients>0){ refresh(); main.postDelayed(this,60000) } } }
     fun acquire(){ if(clients++==0) main.post(ticker) }
     fun release(){clients=(clients-1).coerceAtLeast(0);if(clients==0)main.removeCallbacks(ticker)}
@@ -72,7 +98,7 @@ class PetStore(private val context: Context) {
                 spec.put("token",JSONObject(reply).getString("token")).remove("code")
                 val encrypted=seal(spec.toString())
                 main.post{inFlight=false;if(ticket==generation){prefs.edit().putString("pairing",encrypted).apply();paired=true;demo=false;message="配对成功";done(null);refresh()}}
-            }catch(e:Exception){main.post{inFlight=false;if(ticket==generation)done("无法配对：检查同一 Wi-Fi、电脑防火墙，以及配对码是否过期")}}
+            }catch(e:Exception){main.post{inFlight=false;if(ticket==generation)done(connectionError(e))}}
         }
     }
     fun refresh() {
@@ -84,7 +110,7 @@ class PetStore(private val context: Context) {
                 val raw=request(spec,"/usage",spec.getString("token"),false)
                 val parsed=decode(raw)?:error("Invalid quota")
                 main.post{inFlight=false;if(ticket==generation){usage=parsed;prefs.edit().putString("snapshot",raw).apply();message=if(parsed.fresh(System.currentTimeMillis()/1000))"已同步 · 加密连接" else "电脑额度尚未更新";changed()}}
-            }catch(e:Exception){main.post{inFlight=false;if(ticket==generation){usage=usage?.copy(status="stale");message="连接中断 · 显示上次数据";changed()}}}
+            }catch(e:Exception){main.post{inFlight=false;if(ticket==generation){usage=usage?.copy(status="stale");message=connectionError(e)+" · 显示上次数据";changed()}}}
         }
     }
     private fun request(spec:JSONObject,path:String,secret:String,post:Boolean):String {
@@ -100,14 +126,17 @@ class PetStore(private val context: Context) {
             }
         }
         val ssl=SSLContext.getInstance("TLS").apply{init(null,arrayOf(tm),null)}
-        val conn=URL(spec.getString("url").trimEnd('/')+path).openConnection() as HttpsURLConnection
+        // Bypass HTTP proxy settings for LAN traffic; OS-level VPN routing still applies.
+        val conn=URL(spec.getString("url").trimEnd('/')+path).openConnection(Proxy.NO_PROXY) as HttpsURLConnection
         conn.sslSocketFactory=ssl.socketFactory
         // Certificate identity is explicitly bound by the pairing fingerprint, including LAN IP changes.
         conn.hostnameVerifier=HostnameVerifier{_,session->try{val cert=session.peerCertificates[0];MessageDigest.getInstance("SHA-256").digest(cert.encoded).joinToString(""){"%02x".format(it)}==pin}catch(e:Exception){false}}
         conn.connectTimeout=7000;conn.readTimeout=10000;conn.instanceFollowRedirects=false
         conn.setRequestProperty("Authorization","Bearer $secret")
-        if(post){conn.requestMethod="POST";conn.doOutput=true;conn.outputStream.use{it.write(byteArrayOf())}}
-        try {check(conn.responseCode==200);return conn.inputStream.use{input->
+        try {
+            if(post){conn.requestMethod="POST";conn.doOutput=true;conn.outputStream.use{it.write(byteArrayOf())}}
+            if(conn.responseCode!=200)throw SyncHttpException(conn.responseCode)
+            return conn.inputStream.use{input->
             val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(2048)
             while(true){val count=input.read(buffer);if(count<0)break;require(out.size()+count<=16384);out.write(buffer,0,count)}
             String(out.toByteArray())

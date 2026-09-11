@@ -27,6 +27,7 @@ class MainActivity:Activity() {
     private lateinit var week:TextView
     private lateinit var updated:TextView
     private lateinit var overlay:Button
+    private lateinit var address:TextView
     private val handler=Handler(Looper.getMainLooper())
     private val refreshUi=object:Runnable{override fun run(){render();handler.postDelayed(this,1000)}}
     private val onChange:()->Unit={render()}
@@ -80,18 +81,22 @@ class MainActivity:Activity() {
         listOf("stretch" to "伸展","wave" to "招手","compact" to "缩团").forEach{(key,label)->row2.addView(button(label){playAction(key)},chipParams())}
         val connection=card();connection.addView(text("连接电脑",20f,true))
         connection.addView(text("在电脑启动同步端，手机与电脑连接同一 Wi-Fi。首次配对支持粘贴配对码或导入二维码图片。",14f))
+        address=text("",13f);connection.addView(address)
+        connection.addView(button("切换无线地址"){wirelessDialog()})
         connection.addView(button("输入配对码",true){pairDialog()})
         connection.addView(button("导入配对二维码"){startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41)})
         connection.addView(button("解除配对"){AlertDialog.Builder(this).setMessage("解除与电脑的连接并清除缓存？").setNegativeButton("取消",null).setPositiveButton("解除"){_,_->store.forget()}.show()})
         val options=card();options.addView(text("按你的节奏",20f,true))
         fun toggle(key:String,label:String,default:Boolean){options.addView(Switch(this).apply{text=label;setTextColor(ink);isChecked=store.prefs.getBoolean(key,default);setPadding(0,dp(8),0,dp(8));setOnCheckedChangeListener{_,v->store.prefs.edit().putBoolean(key,v).apply()}})}
         toggle("random","待机时随机活动",true);toggle("compact","悬浮待机 20 秒后缩团",true)
+        val hold=text("伸展顶点停留：${store.prefs.getInt("stretchHold",18)}%",13f);options.addView(hold)
+        options.addView(SeekBar(this).apply{max=40;progress=store.prefs.getInt("stretchHold",18);setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,user:Boolean){if(user){store.prefs.edit().putInt("stretchHold",p).apply();hold.text="伸展顶点停留：$p%"}};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})})
         options.addView(text("悬浮大小（重新开启悬浮后生效）",13f))
         options.addView(SeekBar(this).apply{max=80;progress=store.prefs.getInt("size",150)-110;setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,user:Boolean){if(user)store.prefs.edit().putInt("size",110+p).apply()};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})})
         options.addView(Switch(this).apply{text="演示表情（不代表真实额度）";setTextColor(ink);isChecked=store.demo;setOnCheckedChangeListener{_,v->store.setDemo(v)}})
         val moods=LinearLayout(this);options.addView(moods)
         listOf("平静","开心","担忧","难过").forEachIndexed{i,label->moods.addView(button(label){store.demoMood=i;store.setDemo(true);pet.action("idle")},chipParams())}
-        column.addView(text("码团 Android 0.1.1 · 开源预览版\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
+        column.addView(text("码团 Android 0.2.0 · 动作同步桌面 v2.1.2\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
         render()
     }
     private fun render(){
@@ -102,6 +107,7 @@ class MainActivity:Activity() {
         five.text=label("五小时剩余",u?.five);week.text=label("一周剩余",u?.week)
         updated.text=if(u==null)"尚无额度数据 · 配对后显示" else (if(u.fresh(now))"实时快照" else "已过期 / 未同步")+" · 上次更新 "+if(u.updatedAt>0)SimpleDateFormat("MM-dd HH:mm:ss",Locale.getDefault()).format(Date(u.updatedAt*1000)) else "未知"
         overlay.text=if(PetService.running)"收起悬浮码团" else "开启悬浮码团"
+        address.text=store.connectionAddress
     }
     private fun playAction(name:String){pet.action(name);if(PetService.running)startService(Intent(this,PetService::class.java).putExtra("petAction",name))}
     private fun toggleOverlay(){
@@ -112,6 +118,7 @@ class MainActivity:Activity() {
     }
     override fun onRequestPermissionsResult(r:Int,p:Array<out String>,g:IntArray){super.onRequestPermissionsResult(r,p,g);if(r==42){if(g.firstOrNull()==PackageManager.PERMISSION_GRANTED)toggleOverlay() else toast("请允许通知，方便随时收起码团")}}
     private fun pairDialog(){val input=EditText(this).apply{hint="mdt1:…";inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE};AlertDialog.Builder(this).setTitle("粘贴电脑配对码").setView(input).setNegativeButton("取消",null).setPositiveButton("连接"){_,_->pair(input.text.toString())}.show()}
+    private fun wirelessDialog(){val input=EditText(this).apply{hint="电脑 Wi-Fi 地址，例如 192.168.3.44";inputType=android.text.InputType.TYPE_CLASS_TEXT};AlertDialog.Builder(this).setTitle("切换到无线同步").setMessage("填写电脑同步端显示的局域网地址。会验证电脑身份和连接成功后再保存；无需解除已有配对。").setView(input).setNegativeButton("取消",null).setPositiveButton("连接"){_,_->store.switchAddress(input.text.toString()){error->toast(error?:"无线同步已连接，可拔掉数据线")}}.show()}
     private fun pair(code:String){toast("正在安全配对…");store.pair(code){error->toast(error?:"已连接电脑")}}
     @Deprecated("Legacy result bridge") override fun onActivityResult(r:Int,result:Int,data:Intent?){
         super.onActivityResult(r,result,data)

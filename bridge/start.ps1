@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Address,[int]$Port=47831,[switch]$Reset)
+param([string]$Address,[int]$Port=47831,[switch]$Reset)
 $ErrorActionPreference='Stop'
 $python=Get-Command python.exe -ErrorAction SilentlyContinue
 if(-not $python){throw 'Install Python 3.11 or newer, then run this script again.'}
@@ -9,6 +9,7 @@ if(-not(Test-Path "$venv/Scripts/python.exe")){
 }
 & "$venv/Scripts/python.exe" -m pip install -r "$PSScriptRoot/requirements.txt"
 if($LASTEXITCODE -ne 0){throw 'Failed to install bridge dependencies'}
-$argsList=@('--host',$Address,'--port',"$Port")
+$argsList=@('--port',"$Port",'--open-qr')
+if($Address){$argsList+=@('--host',$Address)}
 if($Reset){$argsList+='--reset'}
 & "$venv/Scripts/python.exe" "$PSScriptRoot/bridge.py" @argsList

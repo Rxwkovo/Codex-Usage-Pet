@@ -2,6 +2,19 @@ package dev.rxwkovo.codexpet
 
 import kotlin.math.*
 
+object WirelessEndpoint {
+    fun parse(value:String):String {
+        val parts=value.trim().removePrefix("https://").trimEnd('/').split(':')
+        require(parts.size in 1..2)
+        val ip=parts[0].split('.').map{require(it.matches(Regex("[0-9]{1,3}")));it.toInt().also{v->require(v in 0..255)}}
+        require(ip.size==4)
+        require(ip[0]==10 || (ip[0]==172 && ip[1] in 16..31) || (ip[0]==192 && ip[1]==168))
+        val port=if(parts.size==2)parts[1].toInt() else 47831
+        require(port in 1..65535)
+        return "https://${ip.joinToString(".")}:$port"
+    }
+}
+
 data class WindowQuota(val remaining: Double, val resetsAt: Long)
 data class Usage(val five: WindowQuota?, val week: WindowQuota?, val updatedAt: Long, val status: String) {
     fun fresh(now: Long): Boolean = status == "ok" && updatedAt <= now + 5 && now - updatedAt < 120 &&
@@ -20,6 +33,7 @@ class PetMotion {
     var duration = 1.0; private set
     var facingLeft = false
     var distance = 0.0; private set
+    var stretchHoldPercent = 18
     fun start(name: String, now: Long) {
         action = name; started = now; distance = 0.0
         duration = when(name) { "walk" -> 8.0; "sit" -> 12.0; "sleep" -> 20.0; "compact" -> 3600.0; else -> 3.5 }
@@ -37,9 +51,15 @@ class PetMotion {
             "walk" -> ((distance / 48.0 * 8).toInt() % 8)
             "sit", "sleep" -> { val t=(min(age,duration-age)/1.3).coerceIn(0.0,1.0); (7*t*t*(3-2*t)).roundToInt() }
             "compact" -> (7 * (age / 0.7).coerceIn(0.0,1.0)).roundToInt()
-            "wave", "stretch" -> (7 * (age/duration).coerceIn(0.0,1.0)).roundToInt()
+            "wave" -> (15 * (age/duration).coerceIn(0.0,1.0)).roundToInt()
+            "stretch" -> {
+                val t=(age/duration).coerceIn(0.0,1.0)
+                val hold=stretchHoldPercent.coerceIn(0,40)/100.0
+                val before=(1-hold)*0.6; val after=before+hold
+                when { t<before -> (9*t/before).roundToInt(); t<=after -> 9; else -> (9+6*(t-after)/(1-after)).roundToInt() }
+            }
             else -> mood + if(blink) 4 else 0
         }
-        return Pair(if(action=="idle") "moods" else action,frame.coerceIn(0,7))
+        return Pair(if(action=="idle") "moods" else action,frame.coerceIn(0,if(action in listOf("wave","stretch"))15 else 7))
     }
 }
