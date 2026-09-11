@@ -31,3 +31,10 @@ These additions supersede the old statement above that expressions apply only in
 ## v2.1.1 rendering fix
 
 Original PNGs remain unchanged. Panel detection now isolates the thick face core before filling its convex boundary, preventing a touching body outline in the sleep cels from becoming part of the face. The backing buffer is 440×420 while the logical pet stays 220×210, with high-quality raster scaling and a 48-entry composition cache. `PixelWidth` / `PixelHeight` describe the buffer returned by `GetPixels()`.
+
+
+## v2.1.2 stretch and expression integration
+
+The stretch sheet was redrawn with built-in imagegen using the v2.1.1 sheet as reference. Prompt: preserve the exact flat mint character and both leaves; draw a 4×4 sequence with connected short arms unfolding and reaching above the head, a restrained side stretch, and gradual lowering; whole cels, consistent ground baseline, no cutout rig or 3D. The generated side-bend at index 10 reverses sprout orientation and is not used; the runtime holds index 9 in that slot. The configurable peak pause is defined independently in the motion timeline.
+
+Sheets are split at clear gutters near their nominal grid boundaries. All cels share a scale constrained by the largest pose so extremities remain on canvas. Expression integration now reconstructs only the original feature marks using nearby panel colour, then transfers drawn feature colour differences with a uniform fit. The original panel edge, tone and texture remain attached to the body. No new character geometry is drawn by the player.

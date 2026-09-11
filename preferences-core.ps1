@@ -14,6 +14,7 @@ function Get-PreferenceSchema {
  @('sitDuration','动作','坐下时长（秒）','number',12,3,600),
  @('sleepDuration','动作','躺下时长（秒）','number',18,3,600),
  @('stretchDuration','动作','伸懒腰时长（秒）','number',5,3,60),
+ @('stretchHoldPercent','动作','伸展顶点停留（时长占比 %）','number',18,0,40),
  @('waveDuration','动作','挥手时长（秒）','number',3.8,3,60),
  @('walkMin','动作','散步最短距离（像素）','number',90,10,1000),
  @('walkMax','动作','散步最长距离（像素）','number',170,10,1000),

@@ -55,6 +55,7 @@ public sealed class PetSpriteView : FrameworkElement
     sealed class ScreenRegion
     {
         public bool[] mask=new bool[W*H];
+        public FacePaint paint;
         public double cx,cy,c,s,left=1e6,right=-1e6,top=1e6,bottom=-1e6;
         public ScreenRegion(byte[] p)
         {
@@ -85,6 +86,7 @@ public sealed class PetSpriteView : FrameworkElement
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy;xxSum+=x*x;yySum+=y*y;xySum+=x*y;}
             double angle=.5*Math.Atan2(2*xySum,xxSum-yySum);c=Math.Cos(angle);s=Math.Sin(angle);
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy,u=x*c+y*s,v=-x*s+y*c;left=Math.Min(left,u);right=Math.Max(right,u);top=Math.Min(top,v);bottom=Math.Max(bottom,v);}
+            paint=new FacePaint(p,mask);
         }
         static bool Dark(byte[] p,int i){i*=4;return p[i+3]>240&&p[i]<90&&p[i+1]<105&&p[i+2]<65;}
         static double Cross(Point a,Point b,Point c){return (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);}
@@ -98,25 +100,88 @@ public sealed class PetSpriteView : FrameworkElement
             }
         }
     }
+    // Transfer only the drawn eyes, mouth, cheeks and tear. Reconstruct the
+    // original panel beneath its old marks from nearby unmarked panel pixels.
+    // The panel boundary, colour gradient and ink texture stay with the body cel.
+    sealed class FacePaint
+    {
+        int l,t,w,h;
+        public byte[] clean;
+        public bool[] ink;
+        short[] delta;
+        public FacePaint(byte[] pixels,bool[] mask){
+            int right=0,bottom=0;l=W;t=H;
+            for(int i=0;i<mask.Length;i++)if(mask[i]){l=Math.Min(l,i%W);t=Math.Min(t,i/W);right=Math.Max(right,i%W);bottom=Math.Max(bottom,i/W);}
+            w=right-l+1;h=bottom-t+1;ink=new bool[w*h];clean=new byte[w*h*3];delta=new short[w*h*3];
+            var seed=new bool[w*h];var valid=new bool[w*h];double[] average=new double[3];int count=0;
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+                int j=y*w+x,p=(t+y)*W+l+x;valid[j]=mask[p];
+                for(int k=0;k<3;k++)clean[j*3+k]=pixels[p*4+k];
+                if(!valid[j])continue;
+                int b=pixels[p*4],g=pixels[p*4+1],r=pixels[p*4+2];
+                seed[j]=Math.Max(b,Math.Max(g,r))>112||(r>70&&r>g*1.08);
+            }
+            int radius=Density;
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++)if(seed[y*w+x])for(int dy=-radius;dy<=radius;dy++)for(int dx=-radius;dx<=radius;dx++){
+                int xx=x+dx,yy=y+dy;if(xx>=0&&xx<w&&yy>=0&&yy<h&&valid[yy*w+xx])ink[yy*w+xx]=true;
+            }
+            for(int j=0;j<valid.Length;j++)if(valid[j]&&!ink[j]){count++;for(int k=0;k<3;k++)average[k]+=clean[j*3+k];}
+            if(count==0)throw new InvalidDataException("No unmarked face panel available");
+            for(int k=0;k<3;k++)average[k]/=count;
+            int[] stepX={-1,1,0,0},stepY={0,0,-1,1};
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+                int j=y*w+x;if(!ink[j])continue;double weight=0;double[] tone=new double[3];
+                for(int direction=0;direction<4;direction++)for(int distance=1;;distance++){
+                    int xx=x+stepX[direction]*distance,yy=y+stepY[direction]*distance;
+                    if(xx<0||xx>=w||yy<0||yy>=h)break;int q=yy*w+xx;
+                    if(!valid[q]||ink[q])continue;
+                    double a=1.0/distance;weight+=a;for(int k=0;k<3;k++)tone[k]+=clean[q*3+k]*a;break;
+                }
+                int p=((t+y)*W+l+x)*4;int magnitude=0;
+                for(int k=0;k<3;k++){clean[j*3+k]=(byte)(weight>0?tone[k]/weight:average[k]);delta[j*3+k]=(short)(pixels[p+k]-clean[j*3+k]);magnitude=Math.Max(magnitude,Math.Abs(delta[j*3+k]));}
+                if(magnitude<8)for(int k=0;k<3;k++)delta[j*3+k]=0;
+            }
+        }
+        public void ClearMarks(byte[] result){
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++){int j=y*w+x;if(!ink[j])continue;int p=((t+y)*W+l+x)*4;for(int k=0;k<3;k++)result[p+k]=(byte)Math.Min(result[p+3],clean[j*3+k]);}
+        }
+        double At(int x,int y,int channel){return x<0||y<0||x>=w||y>=h?0:delta[(y*w+x)*3+channel];}
+        public double Sample(double px,double py,int channel){
+            double x=px-l,y=py-t;int x0=(int)Math.Floor(x),y0=(int)Math.Floor(y);double fx=x-x0,fy=y-y0;
+            return At(x0,y0,channel)*(1-fx)*(1-fy)+At(x0+1,y0,channel)*fx*(1-fy)+At(x0,y0+1,channel)*(1-fx)*fy+At(x0+1,y0+1,channel)*fx*fy;
+        }
+    }
     byte[] Compose(string key,int frame)
     {
         string id=key+":"+frame+":"+expression;byte[] result;
         if(composed.TryGetValue(id,out result))return result;
-        result=(byte[])sheets[key][frame].Clone();var dst=screens[key][frame];var src=faceRegions[key][expression];var art=faceArt[key][expression];
+        result=(byte[])sheets[key][frame].Clone();var dst=screens[key][frame];var src=faceRegions[key][expression];
+        dst.paint.ClearMarks(result);
+        // One uniform fit preserves the proportions of hand-drawn features.
+        double scale=.94*Math.Min((dst.right-dst.left)/(src.right-src.left),(dst.bottom-dst.top)/(src.bottom-src.top));
         for(int i=0;i<W*H;i++)if(dst.mask[i]){
             double x=i%W-dst.cx,y=i/W-dst.cy;
-            double u=(x*dst.c+y*dst.s-dst.left)/(dst.right-dst.left),v=(-x*dst.s+y*dst.c-dst.top)/(dst.bottom-dst.top);
-            double a=src.left+u*(src.right-src.left),b=src.top+v*(src.bottom-src.top);
-            double px=Math.Max(0,Math.Min(W-1,src.cx+a*src.c-b*src.s)),py=Math.Max(0,Math.Min(H-1,src.cy+a*src.s+b*src.c));
-            if(!src.mask[(int)Math.Round(py)*W+(int)Math.Round(px)]){px=src.cx;py=Math.Max(0,Math.Min(H-1,src.cy+(src.top+.12*(src.bottom-src.top))*src.c));}
-            int x0=(int)px,y0=(int)py,x1=Math.Min(W-1,x0+1),y1=Math.Min(H-1,y0+1);double fx=px-x0,fy=py-y0;
-            for(int k=0;k<3;k++){
-                double color=art[(y0*W+x0)*4+k]*(1-fx)*(1-fy)+art[(y0*W+x1)*4+k]*fx*(1-fy)+art[(y1*W+x0)*4+k]*(1-fx)*fy+art[(y1*W+x1)*4+k]*fx*fy;
-                result[i*4+k]=(byte)Math.Min(result[i*4+3],color);
-            }
+            double a=(src.left+src.right)/2+(x*dst.c+y*dst.s-(dst.left+dst.right)/2)/scale;
+            double b=(src.top+src.bottom)/2+(-x*dst.s+y*dst.c-(dst.top+dst.bottom)/2)/scale;
+            double px=src.cx+a*src.c-b*src.s,py=src.cy+a*src.s+b*src.c;
+            for(int k=0;k<3;k++)result[i*4+k]=(byte)Math.Max(0,Math.Min(result[i*4+3],result[i*4+k]+src.paint.Sample(px,py,k)));
         }
         while(compositionOrder.Count>=48)composed.Remove(compositionOrder.Dequeue());
         composed.Add(id,result);compositionOrder.Enqueue(id);return result;
+    }
+    // Generated sheets can have uneven gutters. Cut only through clear paper
+    // near the nominal grid boundary, never through a leaf or raised hand.
+    static int[] FindCuts(int[] ink,int divisions){
+        var cuts=new int[divisions+1];cuts[divisions]=ink.Length;
+        double step=(double)ink.Length/divisions;
+        for(int n=1;n<divisions;n++){
+            int nominal=(int)Math.Round(n*step),start=(int)Math.Max(cuts[n-1]+1,nominal-step*.22),end=(int)Math.Min(ink.Length-1,nominal+step*.22);
+            int best=nominal;double score=-1e9;
+            for(int k=start;k<=end;){if(ink[k]!=0){k++;continue;}int first=k;while(k<=end&&ink[k]==0)k++;int center=(first+k-1)/2;double value=(k-first)-Math.Abs(center-nominal)*.1;if(value>score){score=value;best=center;}}
+            if(score<-1e8)throw new InvalidDataException("No clear gutter between sprite cells");
+            cuts[n]=best;
+        }
+        return cuts;
     }
     static byte[][] LoadSheet(string path,int rows=2)
     {
@@ -125,10 +190,13 @@ public sealed class PetSpriteView : FrameworkElement
         int sw=bitmap.PixelWidth,sh=bitmap.PixelHeight;
         var data=new byte[sw*sh*4];bitmap.CopyPixels(data,sw*4,0);
         var frames=new byte[rows*4][];
-        double scale=0;
+        var rowInk=new int[sh];var colInk=new int[sw];
+        for(int y=0;y<sh;y++)for(int x=0;x<sw;x++){int j=(y*sw+x)*4;int low=Math.Min(data[j],Math.Min(data[j+1],data[j+2])),high=Math.Max(data[j],Math.Max(data[j+1],data[j+2]));if(data[j+3]>24&&((low<220&&high-low>18)||low<100)){rowInk[y]++;colInk[x]++;}}
+        int[] xCuts=FindCuts(colInk,4),yCuts=FindCuts(rowInk,rows);
+        var cells=new BitmapSource[frames.Length];var bounds=new Rect[frames.Length];
         for(int i=0;i<frames.Length;i++)
         {
-            int ox=i%4*sw/4,oy=i/4*sh/rows,cw=(i%4+1)*sw/4-ox,ch=(i/4+1)*sh/rows-oy;
+            int ox=xCuts[i%4],oy=yCuts[i/4],cw=xCuts[i%4+1]-ox,ch=yCuts[i/4+1]-oy;
             var pixels=new byte[cw*ch*4];int minX=cw,minY=ch,maxX=0,maxY=0;
             for(int y=0;y<ch;y++)for(int x=0;x<cw;x++)
             {
@@ -165,21 +233,27 @@ public sealed class PetSpriteView : FrameworkElement
                 int srcOffset=((oy+y)*sw+ox+x)*4;
                 for(int k=0;k<3;k++)pixels[n*4+k]=data[srcOffset+k];pixels[n*4+3]=255;
             }
-            if(i==0)scale=Density*Math.Min(180.0/(maxY-minY+1),188.0/(maxX-minX+1));
-            var cell=BitmapSource.Create(cw,ch,96,96,PixelFormats.Pbgra32,null,pixels,cw*4);cell.Freeze();
-            var visual=new DrawingVisual();
+            cells[i]=BitmapSource.Create(cw,ch,96,96,PixelFormats.Pbgra32,null,pixels,cw*4);cells[i].Freeze();
+            bounds[i]=new Rect(minX,minY,maxX-minX+1,maxY-minY+1);
+        }
+        // Keep a single scale through the action, sized for its largest pose.
+        double scale=Density*Math.Min(180.0/bounds[0].Height,188.0/bounds[0].Width);
+        foreach(var box in bounds)scale=Math.Min(scale,Density*Math.Min(190.0/box.Height,204.0/box.Width));
+        for(int i=0;i<frames.Length;i++){
+            var box=bounds[i];var cell=cells[i];var visual=new DrawingVisual();
             RenderOptions.SetBitmapScalingMode(visual,BitmapScalingMode.HighQuality);
-            using(var dc=visual.RenderOpen())
-            {
-                // First cell fixes scale for the entire action; all cells share a foot anchor.
-                bool flip=Path.GetFileNameWithoutExtension(path)=="walk" && i>=4;
+            using(var dc=visual.RenderOpen()){
+                bool flip=Path.GetFileNameWithoutExtension(path)=="walk"&&i>=4;
                 if(flip)dc.PushTransform(new ScaleTransform(-1,1,W/2.0,0));
-                dc.DrawImage(cell,new Rect(W/2.0-(minX+maxX+1)/2.0*scale,198*Density-(maxY+1)*scale,cw*scale,ch*scale));
+                dc.DrawImage(cell,new Rect(W/2.0-(box.Left+box.Width/2)*scale,198*Density-box.Bottom*scale,cell.PixelWidth*scale,cell.PixelHeight*scale));
                 if(flip)dc.Pop();
             }
             var rendered=new RenderTargetBitmap(W,H,96,96,PixelFormats.Pbgra32);rendered.Render(visual);
             frames[i]=new byte[W*H*4];rendered.CopyPixels(frames[i],Stride,0);
         }
+        // One generated side-bend reverses the sprout orientation. Hold the
+        // preceding drawn peak for that cel instead, then lower the arms.
+        if(Path.GetFileNameWithoutExtension(path)=="stretch"&&frames.Length==16)frames[10]=frames[9];
         return frames;
     }
     public void SetFrame(string key,double frame,bool mirror,double now,double transitionSeconds,double breathing,int alternate,double mix)
