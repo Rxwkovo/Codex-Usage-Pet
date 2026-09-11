@@ -1,5 +1,5 @@
-﻿function Show-PetSettings {
- if($null -ne $script:settingsWindow) {$script:settingsWindow.Activate(); return}
+﻿function Show-PetSettings([string]$SelectTab='') {
+ if($null -ne $script:settingsWindow) {if($SelectTab -eq '手机连接' -and $null -ne $script:mobileTab){$script:settingsTabs.SelectedItem=$script:mobileTab}; $script:settingsWindow.Activate(); return}
  Wake-Pet
  $dialog=New-Object Windows.Window
  $script:settingsWindow=$dialog
@@ -14,7 +14,7 @@
  $reset=New-Object Windows.Controls.Button; $reset.Content='恢复默认'; $reset.Padding='14,8'; $reset.Margin='0,0,12,0'; [void]$footer.Children.Add($reset)
  $cancel=New-Object Windows.Controls.Button; $cancel.Content='取消'; $cancel.Padding='14,8'; $cancel.Margin='0,0,12,0'; [void]$footer.Children.Add($cancel)
  $save=New-Object Windows.Controls.Button; $save.Content='保存并应用'; $save.Padding='18,8'; $save.Background='#B5EBD1'; [void]$footer.Children.Add($save)
- $tabs=New-Object Windows.Controls.TabControl; [void]$root.Children.Add($tabs)
+ $tabs=New-Object Windows.Controls.TabControl; $script:settingsTabs=$tabs; [void]$root.Children.Add($tabs)
  $fields=@{}; $groups=@{}
  foreach($s in (Get-PreferenceSchema)) {
   if(-not $groups.ContainsKey($s.group)) {
@@ -33,9 +33,21 @@
   }
   $fields[$s.key]=$field; [void]$groups[$s.group].Children.Add($row)
  }
+ $script:mobileTab=Add-MobileSettingsTab $tabs
+ if($SelectTab -eq '手机连接'){$tabs.SelectedItem=$script:mobileTab}
  $font=New-Object Windows.Controls.ComboBox; $font.Margin='0,8,0,12'
  foreach($f in @('Microsoft YaHei UI','Microsoft YaHei','Segoe UI','SimHei')) {[void]$font.Items.Add($f)}
  $font.SelectedItem=$script:preferences.fontFamily
+ $tabs.Add_SelectionChanged({
+  if($tabs.SelectedItem -eq $script:mobileTab){
+   $reset.Visibility='Collapsed';$save.Visibility='Collapsed';$cancel.Content='完成'
+   $header.Text="手机连接与配对`n本页操作立即生效，关闭窗口后同步会继续运行。"
+  }else{
+   $reset.Visibility='Visible';$save.Visibility='Visible';$cancel.Content='取消'
+   $header.Text="让码团按你的节奏生活`n保存后立即生效。随机动作按上一段动作结束后计时。"
+  }
+ })
+ if($SelectTab -eq '手机连接'){$reset.Visibility='Collapsed';$save.Visibility='Collapsed';$cancel.Content='完成';$header.Text="手机连接与配对`n本页操作立即生效，关闭窗口后同步会继续运行。"}
  $fontLabel=New-Object Windows.Controls.TextBlock; $fontLabel.Text='字体'; [void]$groups['外观'].Children.Add($fontLabel); [void]$groups['外观'].Children.Add($font)
  $reset.Add_Click({$defaults=Get-DefaultPreferences; foreach($s in (Get-PreferenceSchema)){if($s.type -eq 'bool'){$fields[$s.key].IsChecked=$defaults[$s.key]}else{$fields[$s.key].Text=[string]$defaults[$s.key]}}; $font.SelectedItem=$defaults.fontFamily})
  $cancel.Add_Click({$dialog.Close()})
@@ -62,5 +74,5 @@
    $dialog.Close()
   })
  }
- try {[void]$dialog.ShowDialog()} finally {$script:settingsWindow=$null; Wake-Pet}
+ try {[void]$dialog.ShowDialog()} finally {if($null -ne $script:mobileUiTimer){$script:mobileUiTimer.Stop();$script:mobileUiTimer=$null};$script:mobileControls=$null;$script:mobileTab=$null;$script:settingsTabs=$null;$script:settingsWindow=$null; Wake-Pet}
 }

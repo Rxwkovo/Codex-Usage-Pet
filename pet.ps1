@@ -10,6 +10,9 @@ if(-not ('PetSpriteView' -as [type])) {
 . (Join-Path $PSScriptRoot 'usage-core.ps1')
 . (Join-Path $PSScriptRoot 'preferences-core.ps1')
 . (Join-Path $PSScriptRoot 'settings-ui.ps1')
+. (Join-Path $PSScriptRoot 'mobile-core.ps1')
+. (Join-Path $PSScriptRoot 'mobile-ui.ps1')
+if(-not $Preview -and -not $Smoke){Initialize-MobileLink}
 $script:preferencesPath=Join-Path $PSScriptRoot 'preferences.json'
 $script:preferences=Get-DefaultPreferences
 if (-not $Preview -and -not $Smoke -and (Test-Path $script:preferencesPath)) {
@@ -318,6 +321,7 @@ function Add-Item([string]$title,[scriptblock]$action) {
  $item.Header = $title; $item.Add_Click($action); [void]$menu.Items.Add($item)
 }
 Add-Item '设置…' { Show-PetSettings }
+Add-Item '连接手机…' { Show-PetSettings '手机连接' }
 Add-Item '摸摸码团' { Set-PetAction 'idle'; Say ($lines | Get-Random); Bounce 1.15 0.83 }
 Add-Item '散步一会儿' { Set-PetAction 'walk' }
 Add-Item '坐下陪我' { Set-PetAction 'sit' }
@@ -388,6 +392,8 @@ function Initialize-PetTray {
  $show.Add_Click({Show-PetFromTray})
  $settings=$script:trayMenu.Items.Add('设置…')
  $settings.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Show-PetSettings})})
+ $mobile=$script:trayMenu.Items.Add('连接手机…')
+ $mobile.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Show-PetSettings '手机连接'})})
  [void]$script:trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
  $script:trayExit=$script:trayMenu.Items.Add('退出码团')
  $script:trayExit.Add_Click({if($null -ne $script:settingsWindow){$script:settingsWindow.Close()}; $window.Close()})
@@ -395,7 +401,7 @@ function Initialize-PetTray {
  $script:tray.Add_MouseDoubleClick({if($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){Show-PetFromTray}})
  $script:tray.Visible=$true
 }
-$window.Add_Closed({ $timer.Stop(); Remove-PetTray; if (-not $Preview -and -not $Smoke) { Save-State } })
+$window.Add_Closed({ $timer.Stop(); Stop-MobileLink; Remove-PetTray; if (-not $Preview -and -not $Smoke) { Save-State } })
 if ($Preview) {
  Resize-Pet 0.8
  Resize-Pet 1.3
@@ -435,9 +441,10 @@ if ($Preview) {
  $encoder.Save($stream); $stream.Dispose(); $window.Close()
 } else {
  Refresh-Usage
+ if(-not $Smoke -and $script:mobileConfig.autoStart){try{Start-MobileLink}catch{$script:mobileMessage=$_.Exception.Message}}
  $timer.Start()
  Say '你好，我是码团。点我摸摸，右键打开菜单。'
- try {Initialize-PetTray; [void]$window.ShowDialog()} finally {$timer.Stop(); Remove-PetTray}
+ try {Initialize-PetTray; [void]$window.ShowDialog()} finally {$timer.Stop(); Stop-MobileLink; Remove-PetTray}
  if ($Smoke) {
   if ($null -eq $script:smokeDistance -or $script:smokeDistance -lt 8) {throw 'Live walking did not move the desktop window'}
   if($null -ne $script:tray){throw 'Tray icon was not disposed on exit'}

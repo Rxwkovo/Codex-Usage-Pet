@@ -8,3 +8,9 @@ dist/
 
 preferences.json
 art-v2/
+
+mobile-sync/__pycache__/
+mobile-sync/*.spec
+mobile-sync/build/
+mobile-sync/dist/
+preview-mobile-settings.png

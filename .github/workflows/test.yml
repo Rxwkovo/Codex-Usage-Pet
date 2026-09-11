@@ -23,6 +23,17 @@ jobs:
       - name: Verify hand-drawn action expressions
         shell: powershell
         run: ./tests/handdrawn.tests.ps1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install mobile component build dependencies
+        run: python -m pip install -r mobile-sync/requirements.txt
+      - name: Verify mobile settings and HTTPS lifecycle
+        shell: powershell
+        run: |
+          ./tests/mobile.tests.ps1
+          python -m unittest discover -s mobile-sync -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Windows executable
         shell: powershell
         run: ./build.ps1

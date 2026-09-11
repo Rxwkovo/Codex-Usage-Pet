@@ -4,6 +4,12 @@
 
 ![手绘风格码团，额度为演示数据](preview.png)
 
+## v2.2.0：设置中连接手机
+
+新增 **设置 → 手机连接**：开启同步、选择 Wi-Fi 地址、显示配对二维码、查看手机状态和解除配对都可在桌面码团中完成。托盘也提供「连接手机」快捷入口。手机同步组件随 EXE 一起安装，无需另装 Python 或启动独立同步程序。
+
+默认关闭同步；可配置随码团启动、端口和配对码有效期。只分享五小时／一周额度与更新时间，电脑登录信息留在电脑上。详细连接和排查说明见 [手机连接说明](mobile-sync/README.md)。手机端请安装 [Android 0.2.0](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/tag/android-v0.2.0)。
+
 ## v2.1.2：完整叶片、自然表情与舒展动作
 
 修复伸懒腰时叶尖被切图截断的问题，补画双手举高与轻轻侧伸的姿势。顶点停留比例可在设置中调整，默认占整段动作的 18%。表情保留身体原有面板的底色和纹理，只替换五官，减少整块脸贴上去的感觉。
@@ -22,7 +28,7 @@
 
 ## 下载和使用
 
-在 [Releases](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/latest) 下载 EXE，退出旧版后双击启动。需要 Windows 10/11、系统自带 Windows PowerShell 5.1 和 .NET Framework；在线额度需要本机安装 Codex 并使用 ChatGPT 账户登录。
+在 [Releases](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/latest) 下载 EXE，退出旧版后双击启动。需要 Windows 10/11 x64、系统自带 Windows PowerShell 5.1 和 .NET Framework；在线额度需要本机安装 Codex 并使用 ChatGPT 账户登录。
 
 - **右下角系统托盘**：右键可显示码团、打开设置或退出。双击图标展开码团；图标可能位于托盘折叠菜单。
 - **单击**：摸摸码团；拖动可调整位置，靠近主屏工作区边缘时吸附。
@@ -31,9 +37,9 @@
 - 默认空闲 **15 秒**后收起手脚和额度面板，缩至正常大小的 **42%**。鼠标移入、有效额度变化或动作开始时展开；至少保持 **8 秒**。
 - 额度决定各动作与缩团中的情绪；眨眼和动作分别控制，睡觉保留当前情绪的闭眼版本。
 
-v2.1 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.1.2`，首次运行优先迁移 v2.1.1，并按版本顺序回退查找旧设置 的位置、大小、频率等适用设置。重复启动 EXE 不会重复创建宠物。退出后删除 EXE 和对应版本目录即可卸载；没有开机自启。
+v2.2 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.2.0`，首次运行优先迁移 v2.1.2 的位置、大小、频率等设置，并按版本顺序回退查找旧设置。重复启动 EXE 不会重复创建宠物。退出后删除 EXE 和对应版本目录即可卸载；没有开机自启。
 
-`preferences.json` 保存外观和行为偏好，`settings.json` 保存位置；设置保存后立即生效，取消不应用修改。支持恢复默认，最小/最大值及刷新/过期时间有输入校验。手绘版移除了旧版逐个控制关节、叶片和视线的几何参数，动作形状由图稿决定；保留时长、间隔、概率、步距、短过渡、呼吸、眨眼、字体、大小、透明度、气泡和专注时长等有效设置。
+手机连接页的操作即时生效并独立保存。`preferences.json` 保存外观和行为偏好，`settings.json` 保存位置；设置保存后立即生效，取消不应用修改。支持恢复默认，最小/最大值及刷新/过期时间有输入校验。手绘版移除了旧版逐个控制关节、叶片和视线的几何参数，动作形状由图稿决定；保留时长、间隔、概率、步距、短过渡、呼吸、眨眼、字体、大小、透明度、气泡和专注时长等有效设置。
 
 ## 额度与网络
 
@@ -48,6 +54,8 @@ v2.1 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.1.2`，首次运行优先迁移 v
 ## 开发
 
 ```powershell
+python -m pip install -r mobile-sync/requirements.txt
+python -m unittest discover -s mobile-sync -v
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\usage.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\mood.tests.ps1
