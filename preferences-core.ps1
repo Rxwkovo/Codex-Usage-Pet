@@ -56,13 +56,17 @@ function Get-PreferenceSchema {
  @('barTransition','额度','额度条过渡（秒）','number',0.7,0.1,3)
  ) | ForEach-Object { @{key=$_[0];group=$_[1];label=$_[2];type=$_[3];default=$_[4];min=$_[5];max=$_[6]} }
 }
+function Get-FontChoices { @('Microsoft YaHei UI','Microsoft YaHei','Segoe UI','SimHei') }
 function Get-DefaultPreferences {
- $p=@{fontFamily='Microsoft YaHei UI'}
+ $p=@{fontFamily=(Get-FontChoices)[0]}
  foreach($s in (Get-PreferenceSchema)) { if($s.type -eq 'bool') {$p[$s.key]=[bool]$s.default} else {$p[$s.key]=[double]$s.default} }
  return $p
 }
 function Test-Preferences($p) {
  $p=$p.Clone()
+ # fontFamily sits outside the numeric schema but must still be a usable family
+ # name: Window.FontFamily throws on an empty string.
+ if(-not $p.ContainsKey('fontFamily') -or [string]::IsNullOrWhiteSpace([string]$p.fontFamily)) {return '字体：请选择一种字体。'}
  foreach($s in (Get-PreferenceSchema)) {
   if(-not $p.ContainsKey($s.key)) {return '缺少设置：'+$s.label}
   if($s.type -eq 'number') {

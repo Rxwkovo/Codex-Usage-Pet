@@ -1,4 +1,5 @@
 ﻿$script:mobileProcess=$null
+$script:mobileStartedAt=[DateTime]::MinValue
 $script:mobileSession=''
 $script:mobileMessage='尚未开启手机同步'
 $script:mobileRoot=Join-Path $env:LOCALAPPDATA 'CodexUsagePet/mobile-link'
@@ -78,7 +79,15 @@ function Get-MobileStatus {
    }
   } catch { }
  }
- if($alive){return [pscustomobject]@{state='starting';qr=$false}}
+ if($alive){
+  # 'starting' used to have no expiry, unlike the two death checks in the running
+  # branch above. A service that hung before its first status.json (icacls/whoami have
+  # no timeout, and a redirected profile or AV interference can stall them) left the
+  # settings UI on "正在开启加密同步…" with 保存并开启同步 disabled forever.
+  $startingFor=if($script:mobileStartedAt -eq [DateTime]::MinValue){0.0}else{([DateTime]::UtcNow-$script:mobileStartedAt).TotalSeconds}
+  if($startingFor -gt 25){return [pscustomobject]@{state='error';error='startup_failed';qr=$false}}
+  return [pscustomobject]@{state='starting';qr=$false}
+ }
  if($null -ne $script:mobileProcess){return [pscustomobject]@{state='error';error='startup_failed';qr=$false}}
  return [pscustomobject]@{state='stopped';qr=$false}
 }
@@ -89,13 +98,25 @@ function Send-MobileCommand([string]$Action) {
  Write-MobileJson $path @{session=$script:mobileSession;action=$Action}
 }
 function Stop-MobileLink {
+ # Must never throw. It runs from the pet's Closed handler and from pet.ps1's finally,
+ # where an exception would skip Remove-PetTray (leaving a ghost tray icon) or take the
+ # whole pet down. Kill() in particular throws when the child exits between the check
+ # and the call, and Dispose() must happen either way.
  if($null -ne $script:mobileProcess) {
-  if(-not $script:mobileProcess.HasExited) {
-   Send-MobileCommand 'stop'
-   if(-not $script:mobileProcess.WaitForExit(2500)){$script:mobileProcess.Kill(); [void]$script:mobileProcess.WaitForExit(1000)}
+  try {
+   if(-not $script:mobileProcess.HasExited) {
+    Send-MobileCommand 'stop'
+    if(-not $script:mobileProcess.WaitForExit(2500)) {
+     try{$script:mobileProcess.Kill()}catch{}
+     [void]$script:mobileProcess.WaitForExit(1000)
+    }
+   }
+  } catch {} finally {
+   try{$script:mobileProcess.Dispose()}catch{}
+   $script:mobileProcess=$null
   }
-  $script:mobileProcess.Dispose(); $script:mobileProcess=$null
  }
+ $script:mobileStartedAt=[DateTime]::MinValue
  $script:mobileMessage='同步已关闭，手机会保留上次数据并提示过期。'
 }
 function Start-MobileLink {
@@ -112,6 +133,7 @@ function Start-MobileLink {
  $info=New-Object Diagnostics.ProcessStartInfo
  $info.FileName=$exe; $info.Arguments=$argsText; $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle='Hidden'
  $script:mobileProcess=[Diagnostics.Process]::Start($info)
+ $script:mobileStartedAt=[DateTime]::UtcNow
  $script:mobileMessage='正在开启加密同步…'
 }
 function Get-MobileStatusText($Status) {

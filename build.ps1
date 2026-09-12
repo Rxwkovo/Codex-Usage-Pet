@@ -20,7 +20,7 @@ try {
 } finally {$archive.Dispose()}
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 if (-not (Test-Path $compiler)) { $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework/v4.0.30319/csc.exe' }
-$output=Join-Path $dist 'Codex-Usage-Pet-v2.2.0.exe'
+$output=Join-Path $dist 'Codex-Usage-Pet-v2.2.1.exe'
 $arguments=@('/nologo','/target:winexe','/platform:anycpu','/optimize+',('/out:'+$output),('/resource:'+$payload+',pet.zip'),'/reference:System.Windows.Forms.dll','/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 if (Test-Path (Join-Path $PSScriptRoot 'pet.ico')) { $arguments+=('/win32icon:'+(Join-Path $PSScriptRoot 'pet.ico')) }
 $arguments+=(Join-Path $PSScriptRoot 'launcher.cs')

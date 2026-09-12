@@ -14,7 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from desktop import DesktopBridge, atomic_json, make_desktop_server, read_json
+from desktop import ConnectionDeadline, DesktopBridge, atomic_json, make_desktop_server, read_json
 from protocol import certificate
 
 
@@ -155,6 +155,108 @@ class DesktopLifecycleTests(unittest.TestCase):
             finally:
                 for child in (process, parent):
                     if child.poll() is None: child.terminate(); child.wait(timeout=5)
+
+class ConnectionDeadlineTests(unittest.TestCase):
+    """The reaper is the only thing that can end a connection that keeps trickling bytes."""
+
+    def _pair(self):
+        return socket.socketpair()
+
+    def test_reaper_closes_a_connection_that_outlives_its_limit(self):
+        server_end, client_end = self._pair()
+        deadline = ConnectionDeadline(1)
+        deadline.add(server_end)
+        deadline.start()
+        try:
+            client_end.settimeout(10)
+            start = time.monotonic()
+            self.assertEqual(client_end.recv(1), b'')   # EOF: the far end was closed
+            self.assertLess(time.monotonic() - start, 5)
+        finally:
+            deadline.close(); server_end.close(); client_end.close()
+
+    def test_discarded_connections_are_left_alone(self):
+        server_end, client_end = self._pair()
+        deadline = ConnectionDeadline(1)
+        deadline.add(server_end)
+        deadline.discard(server_end)
+        deadline.start()
+        try:
+            time.sleep(2.0)
+            server_end.sendall(b'x')
+            client_end.settimeout(5)
+            self.assertEqual(client_end.recv(1), b'x')
+        finally:
+            deadline.close(); server_end.close(); client_end.close()
+
+
+class SecurityTests(unittest.TestCase):
+    """A phone must never reach anything outside the documented quota."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        state = Path(self.tmp.name)
+        usage = state / 'usage.json'
+        now = int(time.time())
+        atomic_json(usage, dict(status='ok', updatedAt=now,
+                                fiveHour=dict(remaining=76, resetsAt=now+3600),
+                                weekly=dict(remaining=24, resetsAt=now+86400),
+                                chatContent='MUST NOT LEAK', privateField='MUST NOT LEAK'))
+        self.bridge = DesktopBridge(state, usage, 10)
+        self.cert, key, _ = certificate(state, '127.0.0.1')
+        self.server = make_desktop_server(self.bridge, '127.0.0.1', 0, self.cert, key)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.request = client(self.cert, self.server.server_port)
+
+    def tearDown(self):
+        self.server.shutdown(); self.server.server_close(); self.thread.join(); self.tmp.cleanup()
+
+    def token(self):
+        return self.request('/pair', self.bridge.invite, 'POST')['token']
+
+    def test_only_lan_and_loopback_peers_are_served(self):
+        for host in ('192.168.1.9', '10.0.0.7', '172.16.0.1', '127.0.0.1'):
+            self.assertTrue(self.server.verify_request(None, (host, 1)), host)
+        for host in ('8.8.8.8', '172.32.0.1', '169.254.1.1', '0.0.0.0', '::1', 'not-an-ip'):
+            self.assertFalse(self.server.verify_request(None, (host, 1)), host)
+
+    def test_usage_carries_only_the_documented_fields(self):
+        body = self.request('/usage', self.token())
+        self.assertEqual(sorted(body), ['fiveHour', 'serverTime', 'status', 'updatedAt', 'weekly'])
+        self.assertIsInstance(body['serverTime'], int)
+        self.assertEqual(sorted(body['fiveHour']), ['remaining', 'resetsAt'])
+        self.assertEqual(sorted(body['weekly']), ['remaining', 'resetsAt'])
+        # the extra keys that were in the file must not survive the whitelist
+        raw = json.dumps(body)
+        self.assertNotIn('chatContent', raw)
+        self.assertNotIn('privateField', raw)
+        self.assertNotIn('MUST NOT LEAK', raw)
+
+    def test_a_device_token_is_required_and_length_bounded(self):
+        for bad in ('', 'x', 'x'*5000, self.bridge.invite):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.request('/usage', bad)
+            self.assertEqual(caught.exception.code, 401)
+
+    def test_only_the_two_documented_paths_are_served(self):
+        token = self.token()
+        for path in ('/', '/devices.json', '/server.pem', '/key.pem', '/usage.json',
+                     '/../usage.json', '/usage?x=1', '/pair'):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.request(path, token)
+            self.assertEqual(caught.exception.code, 404, path)
+
+    def test_requests_are_rate_limited(self):
+        token = self.token()
+        codes = []
+        for _ in range(70):
+            try:
+                self.request('/usage', token); codes.append(200)
+            except urllib.error.HTTPError as error:
+                codes.append(error.code)
+        self.assertIn(429, codes, 'the request rate must be bounded')
+        self.assertEqual(codes[0], 200)
 
 
 if __name__ == '__main__': unittest.main()

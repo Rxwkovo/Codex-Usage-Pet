@@ -16,18 +16,42 @@ import secrets
 import socket
 import ssl
 import subprocess
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import qrcode
-from protocol import Bridge, certificate, is_lan_ip, sanitize
+from protocol import Bridge, SourceRateLimit, certificate, is_lan_ip, sanitize
 
 
 def atomic_json(path, data):
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(data, ensure_ascii=False, allow_nan=False), encoding='utf-8')
-    temp.replace(path)
+    """Publish JSON through a unique temporary name, retrying Windows share collisions.
+
+    os.replace needs DELETE access to the target, and the PowerShell settings UI reads
+    status.json every second with a share mode that refuses it. One collision used to
+    raise straight out of the main loop and shut the whole service down for good, so
+    brief retries matter. The temporary name is unique because the standalone bridge
+    can be writing the same state directory.
+    """
+    handle, temp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + '.', suffix='.tmp')
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+            stream.write(json.dumps(data, ensure_ascii=False, allow_nan=False))
+        for attempt in range(5):
+            try:
+                os.replace(temp, path)
+                return
+            except OSError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
+    except Exception:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
 
 
 def read_json(path, default=None):
@@ -134,6 +158,11 @@ class DesktopBridge(Bridge):
     def snapshot(self):
         now = time.time()
         with self.lock:
+            # Forget devices that are no longer paired. Their entries kept this map
+            # growing, and 'lastSeen' could report a phone the user had replaced while
+            # 'online' only counted the current tokens, so the two disagreed.
+            live = set(self.tokens)
+            self.last_seen = {k: v for k, v in self.last_seen.items() if k in live}
             return {
                 'paired': len(self.tokens),
                 'online': sum(now-self.last_seen.get(t, 0) < 120 for t in self.tokens),
@@ -143,7 +172,66 @@ class DesktopBridge(Bridge):
             }
 
 
-def make_desktop_server(bridge, host, port, cert, key):
+def _shutdown_socket(sock):
+    """Close a socket from the reaper; this unblocks the worker that holds it."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+class ConnectionDeadline:
+    """Give every accepted connection an absolute lifetime.
+
+    socket.settimeout() bounds one send/recv, not the connection. A client that dribbles
+    a byte at a time resets it on every read, so it can hold a worker slot forever - and
+    with all 16 slots held the server closed every new connection before the TLS
+    handshake, so the phone only ever saw a network error. The reaper closes anything
+    that outlives `limit`, which makes the blocked read fail and frees the slot.
+    """
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.lock = threading.Lock()
+        self.live = {}
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._reap, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def add(self, sock):
+        with self.lock:
+            self.live[sock] = time.monotonic()
+
+    def discard(self, sock):
+        with self.lock:
+            self.live.pop(sock, None)
+
+    def close(self):
+        self.stop.set()
+        with self.lock:
+            socks = list(self.live)
+            self.live.clear()
+        for sock in socks:
+            _shutdown_socket(sock)
+
+    def _reap(self):
+        while not self.stop.wait(1.0):
+            now = time.monotonic()
+            with self.lock:
+                expired = [sock for sock, accepted in self.live.items() if now - accepted > self.limit]
+                for sock in expired:
+                    self.live.pop(sock, None)
+            for sock in expired:
+                _shutdown_socket(sock)
+
+
+def make_desktop_server(bridge, host, port, cert, key, deadline_seconds=15):
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(cert, key)
@@ -167,13 +255,23 @@ def make_desktop_server(bridge, host, port, cert, key):
             self.end_headers()
             self.wfile.write(raw)
 
+        def guard(self):
+            """Shared gate for every route: source rate limit, then the path check."""
+            if not self.server.limiter.allow(self.client_address[0]):
+                self.reply(429, {'error': 'too_many_requests'}); return False
+            return True
+
         def do_POST(self):
+            if not self.guard():
+                return
             if self.path != '/pair':
                 self.reply(404, {'error': 'not_found'}); return
             token = bridge.pair(self.headers.get('Authorization', '').removeprefix('Bearer '), self.client_address[0])
             self.reply(200 if token else 403, {'token': token} if token else {'error': 'pairing_rejected'})
 
         def do_GET(self):
+            if not self.guard():
+                return
             if self.path != '/usage':
                 self.reply(404, {'error': 'not_found'}); return
             data = bridge.authenticated_usage(self.headers.get('Authorization', '').removeprefix('Bearer '))
@@ -185,20 +283,38 @@ def make_desktop_server(bridge, host, port, cert, key):
 
         def __init__(self):
             self.slots = threading.BoundedSemaphore(16)
+            self.deadline = ConnectionDeadline(deadline_seconds)
+            self.limiter = SourceRateLimit(60)
             super().__init__((host, port), Handler)
+            self.deadline.start()
+
+        def verify_request(self, request, client_address):
+            # Enforce the "LAN only" promise in code instead of relying on the firewall
+            # rule alone: a source routable from outside must never reach a handler.
+            return is_lan_ip(client_address[0]) or client_address[0] == '127.0.0.1'
 
         def get_request(self):
             sock, address = self.socket.accept()
             try:
                 # Handshake happens in the bounded worker, never the accept loop.
-                return tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False), address
+                wrapped = tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
             except Exception:
                 sock.close()
                 raise
+            self.deadline.add(wrapped)
+            return wrapped, address
+
+        def shutdown_request(self, request):
+            self.deadline.discard(request)
+            super().shutdown_request(request)
 
         def process_request(self, request, address):
             if not self.slots.acquire(False):
-                request.close(); return
+                # Nothing can be reported in HTTP before the handshake, so just drop it.
+                # The absolute deadline above is what stops this from lasting forever.
+                self.deadline.discard(request)
+                request.close()
+                return
             try:
                 super().process_request(request, address)
             except Exception:
@@ -213,6 +329,11 @@ def make_desktop_server(bridge, host, port, cert, key):
 
         def handle_error(self, request, address):
             pass
+
+        def server_close(self):
+            # Close tracked sockets first so workers blocked in a read can finish.
+            self.deadline.close()
+            super().server_close()
 
     return Server()
 
@@ -244,7 +365,12 @@ def main():
         lease = (args.state / 'desktop.lock').open('a+b')
         if os.name == 'nt':
             import msvcrt
-            lease.seek(0); lease.write(b'0'); lease.flush(); lease.seek(0)
+            # Append mode ignores seek() for writes, so writing unconditionally made
+            # desktop.lock grow by one byte on every start. Only seed it when empty.
+            lease.seek(0, os.SEEK_END)
+            if lease.tell() == 0:
+                lease.write(b'0'); lease.flush()
+            lease.seek(0)
             try:
                 msvcrt.locking(lease.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError:
@@ -281,15 +407,27 @@ def main():
                     spec = {'url': url, 'pin': pin, 'code': invite}
                     code = 'mdt1:' + base64.urlsafe_b64encode(json.dumps(spec, separators=(',', ':')).encode()).decode()
                     image = qrcode.make(code)
+                    # Publish the code atomically and before the image. The UI copies
+                    # pairing.txt verbatim, so a truncating write could put a half-written
+                    # code on the clipboard; image-first also showed a new QR beside the
+                    # previous (now invalid) code.
                     image.save(args.control / 'pairing.tmp', format='PNG')
+                    text_temp = args.control / 'pairing.txt.tmp'
+                    text_temp.write_text(code, encoding='utf-8')
+                    text_temp.replace(args.control / 'pairing.txt')
                     (args.control / 'pairing.tmp').replace(args.control / 'pairing.png')
-                    (args.control / 'pairing.txt').write_text(code, encoding='utf-8')
                 else:
                     for name in ('pairing.txt', 'pairing.png'):
                         (args.control / name).unlink(missing_ok=True)
             status = dict(state, session=args.session, state='running', url=url,
                           updatedAt=int(time.time()), usage=bridge.usage(), qr=bool(invite))
-            atomic_json(status_path, status)
+            try:
+                atomic_json(status_path, status)
+            except OSError:
+                # A transient sharing violation while the settings UI reads status.json
+                # used to unwind into the handler below and shut the whole service down
+                # as 'startup_failed'. Missing one status tick is harmless.
+                pass
             time.sleep(0.4)
         status['state'] = 'stopped'
         status['qr'] = False
@@ -303,17 +441,26 @@ def main():
             reason = 'startup_failed'
         status = {'session': args.session, 'state': 'error', 'error': reason, 'qr': False}
     finally:
-        if server:
-            server.shutdown(); server.server_close()
-        if owned:
-            for name in ('pairing.txt', 'pairing.png'):
-                (args.control / name).unlink(missing_ok=True)
-        if parent:
-            parent.close()
-        if lease:
-            lease.close()
-        atomic_json(status_path, status)
-    return 1 if status['state'] == 'error' else 0
+        # Nothing in here may raise: it runs on the way out of a clean stop too, and an
+        # exception would replace the exit code 0 with a traceback, which the UI reports
+        # as "the sync service stopped unexpectedly" when the user simply closed it.
+        try:
+            if server:
+                server.shutdown(); server.server_close()
+            if owned:
+                for name in ('pairing.txt', 'pairing.png'):
+                    try:
+                        (args.control / name).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if parent:
+                parent.close()
+            if lease:
+                lease.close()
+            atomic_json(status_path, status)
+        except Exception:
+            pass
+    return 1 if status.get('state') == 'error' else 0
 
 
 if __name__ == '__main__':

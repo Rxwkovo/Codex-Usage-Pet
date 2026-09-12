@@ -23,6 +23,9 @@ jobs:
       - name: Verify hand-drawn action expressions
         shell: powershell
         run: ./tests/handdrawn.tests.ps1
+      - name: Verify source encodings and Android frame size
+        shell: powershell
+        run: ./tests/source.tests.ps1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -33,6 +36,11 @@ jobs:
         run: |
           ./tests/mobile.tests.ps1
           python -m unittest discover -s mobile-sync -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify standalone bridge pairing and stalled handshakes
+        shell: powershell
+        run: |
+          python -m unittest discover -s bridge -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Windows executable
         shell: powershell

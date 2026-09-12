@@ -14,4 +14,28 @@ $nullValue = Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurat
 Assert ($null -eq $nullValue.fiveHour) 'Null usage must remain unknown'
 $other = Convert-Usage ([pscustomobject]@{rateLimits=@{limitId='other';primary=@{windowDurationMins=300;usedPercent=20}}})
 Assert ($null -eq $other.fiveHour) 'Do not substitute another bucket'
-'PASS: 8 usage assertions'
+# The service is free to rename its windows. Unknown lengths must fall back to
+# shorter=5h / longer=weekly instead of reporting "unknown" forever with no trace,
+# and a single unrecognised window must still stay unknown rather than be guessed.
+$renamed = Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurationMins=120;usedPercent=10;resetsAt=700};secondary=@{windowDurationMins=20160;usedPercent=40;resetsAt=800}}})
+Assert ($renamed.fiveHour.remaining -eq 90) 'Unknown shorter window becomes the five-hour slot'
+Assert ($renamed.weekly.remaining -eq 60) 'Unknown longer window becomes the weekly slot'
+Assert (($renamed.unmappedDurationMins -join ',') -eq '120,20160') 'Unmapped lengths must be recorded for diagnosis'
+$oneUnknown = Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurationMins=777;usedPercent=10;resetsAt=700}}})
+Assert ($null -eq $oneUnknown.fiveHour -and $null -eq $oneUnknown.weekly) 'A single unknown window must remain unknown'
+$knownOnly = Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurationMins=300;usedPercent=10;resetsAt=700}}})
+Assert ($knownOnly.fiveHour.remaining -eq 90) 'A recognised length still maps on its own'
+Assert ($null -eq $knownOnly.weekly -and $null -eq $knownOnly.unmappedDurationMins) 'A recognised length must not trigger the fallback'
+# The wedged-worker watchdog. Refresh-Usage used to ask only "is the worker still
+# running?", so a worker that ignored its own 12s/25s timeouts silenced quota refresh
+# for the rest of the session. Test-UsageWorkerStale is the decision pet.ps1 now
+# consults, and it has to draw the line where the worker's own timeouts already gave up.
+$t0=[DateTime]::UtcNow
+Assert (-not (Test-UsageWorkerStale $t0 $t0)) 'A worker that just started is not stale'
+Assert (-not (Test-UsageWorkerStale $t0 $t0.AddSeconds(89))) 'A slow but living worker must be left alone'
+Assert (Test-UsageWorkerStale $t0 $t0.AddSeconds(90)) 'The watchdog fires at its own deadline'
+Assert (Test-UsageWorkerStale $t0 $t0.AddSeconds(91)) 'A wedged worker must be reaped'
+Assert (-not (Test-UsageWorkerStale $t0 $t0.AddSeconds(-30))) 'A backwards clock must not reap a fresh worker'
+Assert (-not (Test-UsageWorkerStale ([DateTime]::MinValue) $t0)) 'An unset stamp means not recorded, not stale'
+Assert (Test-UsageWorkerStale $t0 $t0.AddSeconds(12) 12.0) 'The deadline must be a parameter'
+'PASS: 21 usage assertions'

@@ -8,8 +8,8 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Codex Usage Pet")]
 [assembly: AssemblyDescription("Animated desktop companion with Codex quota expressions")]
-[assembly: AssemblyVersion("2.2.0.0")]
-[assembly: AssemblyFileVersion("2.2.0.0")]
+[assembly: AssemblyVersion("2.2.1.0")]
+[assembly: AssemblyFileVersion("2.2.1.0")]
 internal static class Launcher
 {
     [STAThread]
@@ -22,14 +22,14 @@ internal static class Launcher
             if (!first) return 0;
             try
             {
-                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "2.2.0");
+                string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", "2.2.1");
                 Directory.CreateDirectory(root);
                 if (!smoke)
                 {
                     foreach (string name in new[] { "settings.json", "preferences.json" })
                     {
                         string oldFile = "";
-                        foreach (string version in new[] { "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.3.1" })
+                        foreach (string version in new[] { "2.2.0", "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.3.1" })
                         {
                             string candidate = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexUsagePet", version, name);
                             if (File.Exists(candidate)) { oldFile = candidate; break; }

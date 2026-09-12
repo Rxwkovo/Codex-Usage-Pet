@@ -1,0 +1,50 @@
+# Normalise line endings in the repository so a checkout does not depend on the
+# machine's core.autocrlf setting.
+#
+# Before this file existed the working tree mixed CRLF and LF file by file (for
+# example preferences-core.ps1 was all CRLF while sprite-core.ps1 was half and
+# half), and files committed from Linux CI came back with different endings than
+# the ones written on Windows. The visible symptom was a file that `git status`
+# reported as modified while `git diff` showed nothing at all.
+
+* text=auto
+
+# Windows-facing sources. The app is built and run with Windows PowerShell 5.1.
+*.ps1    text eol=crlf
+*.cs     text eol=crlf
+*.vbs    text eol=crlf
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# Cross-platform sources; also built and tested on Linux CI.
+/.gitattributes   text eol=lf
+/.gitignore      text eol=lf
+*.py             text eol=lf
+*.md             text eol=lf
+*.json           text eol=lf
+*.yml            text eol=lf
+*.yaml           text eol=lf
+*.kt             text eol=lf
+*.kts            text eol=lf
+*.gradle         text eol=lf
+*.properties     text eol=lf
+*.xml            text eol=lf
+*.txt            text eol=lf
+/gradlew         text eol=lf
+/android/gradlew text eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.exe      binary
+*.dll      binary
+*.pyd      binary
+*.zip      binary
+*.apk      binary
+*.jar      binary
+*.jks      binary
+*.keystore binary
+*.so       binary

@@ -1,0 +1,22 @@
+<!--
+  Status-bar small icon for the foreground-service notification.
+
+  Android renders a notification small icon from its ALPHA CHANNEL ONLY, so
+  ic_pet.xml (three fully opaque colour layers) came out as one solid white
+  rounded rectangle: the eyes and the face panel were invisible. A silhouettes
+  needs its cut-outs to be transparent, which is what fillType="evenOdd" does
+  here - the two eye rectangles become holes instead of a second colour.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M23,10 L23,5 L31,2 L28,9 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M10,14 L38,14 Q44,14 44,22 L44,36 Q44,42 38,42 L10,42 Q4,42 4,36 L4,22 Q4,14 10,14 Z M17,23 L21,23 L21,28 L17,28 Z M27,23 L31,23 L31,28 L27,28 Z" />
+</vector>

@@ -36,7 +36,12 @@
  $script:mobileTab=Add-MobileSettingsTab $tabs
  if($SelectTab -eq '手机连接'){$tabs.SelectedItem=$script:mobileTab}
  $font=New-Object Windows.Controls.ComboBox; $font.Margin='0,8,0,12'
- foreach($f in @('Microsoft YaHei UI','Microsoft YaHei','Segoe UI','SimHei')) {[void]$font.Items.Add($f)}
+ $fontChoices=@(Get-FontChoices)
+ # Keep a hand-edited custom family selectable. Without this, SelectedItem is null
+ # for a value outside the list and 保存并应用 would write an empty font, which then
+ # throws when Window.FontFamily is assigned.
+ if($script:preferences.fontFamily -and $script:preferences.fontFamily -notin $fontChoices) {$fontChoices=@($script:preferences.fontFamily)+$fontChoices}
+ foreach($f in $fontChoices) {[void]$font.Items.Add($f)}
  $font.SelectedItem=$script:preferences.fontFamily
  $tabs.Add_SelectionChanged({
   if($tabs.SelectedItem -eq $script:mobileTab){

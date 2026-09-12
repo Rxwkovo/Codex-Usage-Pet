@@ -46,6 +46,22 @@
  $script:mobileControls.Auto.IsChecked=[bool]$script:mobileConfig.autoStart
  Update-MobileAddressList
  $script:mobileControls.Refresh.Add_Click({Update-MobileAddressList})
+ # This page says every action takes effect immediately and hides 保存并应用, so the
+ # auto-start box has to persist by itself. Ticking it and pressing 完成 used to write
+ # nothing at all, and pet.ps1 never auto-started.
+ $script:mobileControls.Auto.Add_Click({
+  $c=$script:mobileControls
+  $wanted=[bool]$c.Auto.IsChecked
+  $candidate=@{address=[string]$c.Addresses.SelectedValue;port=$c.Port.Text;inviteMinutes=$c.Minutes.Text;autoStart=$wanted}
+  try {
+   Save-MobileConfig $candidate
+   $script:mobileMessage=$(if($wanted){'下次启动码团时会自动开启同步。'}else{'已关闭随码团自动开启同步。'})
+  } catch {
+   $c.Auto.IsChecked=[bool]$script:mobileConfig.autoStart
+   $script:mobileMessage=$_.Exception.Message
+  }
+  Update-MobileSettings
+ })
  $script:mobileControls.Start.Add_Click({
   try {
    $c=$script:mobileControls
@@ -65,7 +81,7 @@
  })
  $script:mobileControls.Renew.Add_Click({Send-MobileCommand 'renew'})
  $script:mobileControls.Copy.Add_Click({
-  if(Test-MobileInvite){[Windows.Clipboard]::SetText([IO.File]::ReadAllText((Join-Path $script:mobileRoot 'pairing.txt'))); $script:mobileControls.Expiry.Text='配对码已复制，请在手机码团中粘贴。'}
+  if(Test-MobileInvite){[Windows.Clipboard]::SetText([IO.File]::ReadAllText((Join-Path $script:mobileRoot 'pairing.txt'))); Set-MobileNotice 'expiry' '配对码已复制，请在手机码团中粘贴。'}
  })
  $script:mobileControls.SaveQr.Add_Click({
   if(Test-MobileInvite){
@@ -84,7 +100,7 @@
    $scriptPath=Join-Path $PSScriptRoot 'mobile-sync/allow-wireless.ps1'
    $argsText='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$scriptPath+'" -Address '+$script:mobileConfig.address+' -Port '+$script:mobileConfig.port+' -Program "'+(Join-Path $PSScriptRoot 'mobile-sync/dist/CodexPet-Mobile-Link/CodexPet-Mobile-Link.exe')+'"'
    $script:mobileFirewallProcess=Start-Process powershell.exe -ArgumentList $argsText -Verb RunAs -WindowStyle Hidden -PassThru
-   $script:mobileControls.LastSeen.Text='请完成 Windows 管理员授权；规则只允许当前网卡的局域网设备访问。'
+   Set-MobileNotice 'seen' '请完成 Windows 管理员授权；规则只允许当前网卡的局域网设备访问。'
   } catch {[void][Windows.MessageBox]::Show($script:settingsWindow,('未能设置局域网访问：'+$_.Exception.Message),'手机连接')}
  })
  [void]$Tabs.Items.Add($tab)
@@ -103,12 +119,24 @@ function Update-MobileAddressList {
  $c.Addresses.ItemsSource=$items
  if($selected -in @($items | ForEach-Object {$_.address})){$c.Addresses.SelectedValue=$selected}elseif($items.Count -gt 0){$c.Addresses.SelectedIndex=0}
  if($items.Count -eq 0){$c.Detail.Text='未找到已连接的局域网网卡。请先将电脑连接到手机所在的 Wi-Fi。'}
+ else{$c.Detail.Text='仅分享额度与更新时间；电脑登录信息留在电脑上。'}
 }
-function Test-MobileInvite {
- $s=Get-MobileStatus
+$script:mobileNotices=@{}
+function Set-MobileNotice([string]$Slot,[string]$Text,[int]$Seconds=6){$script:mobileNotices[$Slot]=@($Text,[DateTime]::UtcNow.AddSeconds($Seconds))}
+function Get-MobileNotice([string]$Slot){
+ $notice=$script:mobileNotices[$Slot]
+ if($null -ne $notice -and [DateTime]::UtcNow -lt $notice[1]){return $notice[0]}
+ return ''
+}
+function Test-MobileInvite($Status) {
+ # Accept the status from the caller when it already has one. Get-MobileStatus opens
+ # status.json, and on Windows that read is what collides with the service replacing
+ # the same file, so halving the reads halves the exposure.
+ if($null -eq $Status){$Status=Get-MobileStatus}
+ $s=$Status
  return ($s.state -eq 'running' -and $s.qr -and $s.expires -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -and (Test-Path -LiteralPath (Join-Path $script:mobileRoot 'pairing.txt')) -and (Test-Path -LiteralPath (Join-Path $script:mobileRoot 'pairing.png')))
 }
-function Update-MobileSettings {
+function Update-MobileSettingsCore {
  if($null -eq $script:mobileControls){return}
  $c=$script:mobileControls; $s=Get-MobileStatus; $running=$s.state -eq 'running'
  $c.Status.Text=Get-MobileStatusText $s
@@ -117,7 +145,7 @@ function Update-MobileSettings {
  $c.Start.Content=$(if($running){'保存并重新开启'}else{'保存并开启同步'})
  $c.Renew.IsEnabled=$running; $c.Firewall.IsEnabled=$running; $c.Revoke.IsEnabled=$running -and $s.paired -gt 0
  if($running){$c.Detail.Text=($s.url+' · 已配对 '+$s.paired+' 台')}
- $valid=Test-MobileInvite
+ $valid=Test-MobileInvite $s
  $c.Copy.IsEnabled=$valid; $c.SaveQr.IsEnabled=$valid
  if($valid){
   $path=Join-Path $script:mobileRoot 'pairing.png'
@@ -132,15 +160,25 @@ function Update-MobileSettings {
   }
   $c.QrHint.Visibility='Collapsed'
   $seconds=[Math]::Max(0,$s.expires-[DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
-  $c.Expiry.Text=('剩余 '+[Math]::Floor($seconds/60)+' 分 '+($seconds%60)+' 秒 · 仅限一次新配对')
+  $notice=Get-MobileNotice 'expiry'
+  $c.Expiry.Text=$(if($notice){$notice}else{'剩余 '+[Math]::Floor($seconds/60)+' 分 '+($seconds%60)+' 秒 · 仅限一次新配对'})
  }else{
   $c.Qr.Source=$null; $c.qrStamp=''; $c.QrHint.Visibility='Visible'
   $c.QrHint.Text=$(if($running){'配对码已使用或失效，可生成新配对码。'}else{'开启同步后，在这里显示配对二维码'})
-  $c.Expiry.Text='生成新配对码不会解除已有手机。'
+  $notice=Get-MobileNotice 'expiry'
+  $c.Expiry.Text=$(if($notice){$notice}else{'生成新配对码不会解除已有手机。'})
  }
  if($s.lastSeen -gt 0){$c.LastSeen.Text='最近收到手机请求：'+[DateTimeOffset]::FromUnixTimeSeconds($s.lastSeen).LocalDateTime.ToString('HH:mm:ss')+'。手机通常每分钟同步一次。'}
+ $notice=Get-MobileNotice 'seen'
+ if($notice){$c.LastSeen.Text=$notice}
  if($null -ne $script:mobileFirewallProcess -and $script:mobileFirewallProcess.HasExited){
-  $c.LastSeen.Text=$(if($script:mobileFirewallProcess.ExitCode -eq 0){'已允许当前网卡的局域网连接，请在手机点立即同步。'}else{'局域网放行未成功。请检查管理员授权与网卡状态。'})
+  Set-MobileNotice 'seen' $(if($script:mobileFirewallProcess.ExitCode -eq 0){'已允许当前网卡的局域网连接，请在手机点立即同步。'}else{'局域网放行未成功。请检查管理员授权与网卡状态。'})
   $script:mobileFirewallProcess.Dispose(); $script:mobileFirewallProcess=$null
  }
+}
+
+function Update-MobileSettings {
+ # Runs from a 1 Hz DispatcherTimer. An exception thrown there propagates out through
+ # ShowDialog() and ends the whole pet, so a UI refresh must never be able to throw.
+ try { Update-MobileSettingsCore } catch { }
 }

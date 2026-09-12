@@ -4,11 +4,11 @@
 
 ![手绘风格码团，额度为演示数据](preview.png)
 
-## v2.2.0：设置中连接手机
+## v2.2.1：同步稳定性与安全修复
 
 新增 **设置 → 手机连接**：开启同步、选择 Wi-Fi 地址、显示配对二维码、查看手机状态和解除配对都可在桌面码团中完成。托盘也提供「连接手机」快捷入口。手机同步组件随 EXE 一起安装，无需另装 Python 或启动独立同步程序。
 
-默认关闭同步；可配置随码团启动、端口和配对码有效期。只分享五小时／一周额度与更新时间，电脑登录信息留在电脑上。详细连接和排查说明见 [手机连接说明](mobile-sync/README.md)。手机端请安装 [Android 0.2.0](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/tag/android-v0.2.0)。
+默认关闭同步；可配置随码团启动、端口和配对码有效期。只分享五小时／一周额度、重置时间和同步时间，电脑登录信息留在电脑上。v2.2.1 修复额度刷新卡住、慢连接占满服务、手机设置状态竞争和 Android 表情导出问题，并加强局域网来源、频率及输出字段限制。详细连接和排查说明见 [手机连接说明](mobile-sync/README.md)。手机端请安装 [Android 0.2.1](https://github.com/Rxwkovo/Codex-Usage-Pet/releases/tag/android-v0.2.1)。
 
 ## v2.1.2：完整叶片、自然表情与舒展动作
 
@@ -37,7 +37,7 @@
 - 默认空闲 **15 秒**后收起手脚和额度面板，缩至正常大小的 **42%**。鼠标移入、有效额度变化或动作开始时展开；至少保持 **8 秒**。
 - 额度决定各动作与缩团中的情绪；眨眼和动作分别控制，睡觉保留当前情绪的闭眼版本。
 
-v2.2 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.2.0`，首次运行优先迁移 v2.1.2 的位置、大小、频率等设置，并按版本顺序回退查找旧设置。重复启动 EXE 不会重复创建宠物。退出后删除 EXE 和对应版本目录即可卸载；没有开机自启。
+v2.2.1 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.2.1`，首次运行优先迁移 v2.2.0 的位置、大小、频率等设置，并按版本顺序回退查找旧设置。重复启动 EXE 不会重复创建宠物。退出后删除 EXE 和对应版本目录即可卸载；没有开机自启。
 
 手机连接页的操作即时生效并独立保存。`preferences.json` 保存外观和行为偏好，`settings.json` 保存位置；设置保存后立即生效，取消不应用修改。支持恢复默认，最小/最大值及刷新/过期时间有输入校验。手绘版移除了旧版逐个控制关节、叶片和视线的几何参数，动作形状由图稿决定；保留时长、间隔、概率、步距、短过渡、呼吸、眨眼、字体、大小、透明度、气泡和专注时长等有效设置。
 
@@ -56,14 +56,23 @@ v2.2 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.2.0`，首次运行优先迁移 v
 ```powershell
 python -m pip install -r mobile-sync/requirements.txt
 python -m unittest discover -s mobile-sync -v
+python -m unittest discover -s bridge -v
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\usage.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\mood.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\behavior.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\preferences.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\tests\sprite.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\tests\handdrawn.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\source.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\mobile.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Smoke
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
+
+上面 8 个 PowerShell 套件与两个 Python 套件就是 CI 的全部检查项；漏跑 `behavior` / `handdrawn` / `mobile` 曾经是文档里的缺口，现已补齐。`source.tests.ps1` 守住两件事：含中文的 `.ps1` 必须存为 UTF-8 BOM（否则 Windows PowerShell 5.1 会按 ANSI 解码而报语法错），以及 Android 成品帧尺寸必须与 `sprite-player.cs` 的内部渲染尺寸一致。
+
+Android 预览版在 `android/`：`./build-windows.ps1` 会打包 APK、跑单元测试与 Lint（Windows 中文路径必须用它）。`android/export-frames.ps1` 从桌面版素材导出 520 张成品帧，**导出前必须先同步桌面版 `sprite-player.cs` 与 `assets/flat`**，否则会用旧图稿覆盖成品帧。
 
 `-Preview` 使用演示额度，不查询账户。`-PreviewAction sit` 等参数可导出动作预览，`-PreviewCompact` 导出缩团。EXE 的 `--smoke` 检查实际走动、缩团、展开和托盘退出，完成后自动关闭。PowerShell 文件须保存为 UTF-8 BOM。
 

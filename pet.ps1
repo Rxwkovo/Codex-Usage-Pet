@@ -68,13 +68,26 @@ function Set-UsageMood($mood) {
  $script:mood=$mood.name
 }
 $script:worker = $null
+$script:workerStarted = [DateTime]::MinValue
 $script:nextRefresh = [DateTime]::MinValue
 $script:usageStamp = ''
 function Refresh-Usage {
  if ($Preview -or $Smoke) { return }
- if ($null -ne $script:worker -and -not $script:worker.HasExited) { return }
+ if ($null -ne $script:worker) {
+  if (-not $script:worker.HasExited) {
+   # read-usage.ps1 has its own timeouts (12s direct / 25s proxied), but the guard
+   # below used to be the only exit: a wedged worker left HasExited false forever,
+   # so quota refresh stopped for the rest of the session. Reap it after the
+   # longest internal timeout plus a generous margin.
+   if (-not (Test-UsageWorkerStale $script:workerStarted ([DateTime]::Now))) { return }
+   try { $script:worker.Kill(); $script:worker.WaitForExit(2000) | Out-Null } catch { }
+  }
+  try { $script:worker.Dispose() } catch { }
+  $script:worker = $null
+ }
  $workerPath = Join-Path $PSScriptRoot 'read-usage.ps1'
  $script:worker = Start-Process powershell.exe -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$workerPath+'"') -WindowStyle Hidden -PassThru
+ $script:workerStarted = [DateTime]::Now
  $script:nextRefresh = [DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
 }
 function Show-Usage {

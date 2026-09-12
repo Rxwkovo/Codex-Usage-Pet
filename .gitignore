@@ -14,3 +14,10 @@ mobile-sync/*.spec
 mobile-sync/build/
 mobile-sync/dist/
 preview-mobile-settings.png
+
+android/.gradle/
+android/.kotlin/
+android/local.properties
+*.jks
+*.keystore
+bridge/__pycache__/
