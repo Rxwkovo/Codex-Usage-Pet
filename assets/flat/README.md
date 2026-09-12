@@ -27,6 +27,8 @@ Generation prompts: preserve the approved mint mascot's complete silhouette, fla
 
 These additions supersede the old statement above that expressions apply only in standing idle. Runtime checks cover all 576 full-body-frame / mood / blink combinations. Only wave and stretch gain body frames in this release.
 
+The crying tear is preserved as a complete reusable hand-drawn element. It is mapped beyond the dark face-panel boundary for walk, sit, sleep, stretch and wave instead of being clipped to the panel mask; compact keeps its complete original tear cel.
+
 
 ## v2.1.1 rendering fix
 

@@ -6,6 +6,7 @@ Add-Type @'
 public static class RasterCheck {
  public static bool Valid(byte[] p){int opaque=0;for(int i=3;i<p.Length;i+=4){if(p[i]>240)opaque++;if(p[i-1]>p[i]||p[i-2]>p[i]||p[i-3]>p[i])return false;}return opaque>4000&&p[3]==0&&p[p.Length-1]==0;}
  public static bool SameAlpha(byte[] a,byte[] b){for(int i=3;i<a.Length;i+=4)if(a[i]!=b[i])return false;return true;}
+ public static bool SameBytes(byte[] a,byte[] b){if(a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
  public static double PanelFraction(bool[] mask,byte[] p){int face=0,body=0;for(int i=0;i<mask.Length;i++){if(mask[i])face++;if(p[i*4+3]>240)body++;}return (double)face/body;}
  public static double ChangedPanel(bool[] mask,byte[] a,byte[] b){int count=0,changed=0;for(int i=0;i<mask.Length;i++)if(mask[i]){count++;if(System.Math.Abs(a[i*4]-b[i*4])>2||System.Math.Abs(a[i*4+1]-b[i*4+1])>2||System.Math.Abs(a[i*4+2]-b[i*4+2])>2)changed++;}return (double)changed/count;}
  public static bool ClearEdge(byte[] p,int width,int height){for(int y=0;y<height;y++)for(int x=0;x<width;x++)if((x<8||y<8||x>=width-8||y>=height-8)&&p[(y*width+x)*4+3]>24)return false;return true;}
@@ -41,6 +42,10 @@ foreach($action in @('walk','sit','sleep','stretch','wave','compact','moods')){
   Assert ($hashes.Count -ge 4) 'Every action cel must display four distinct quota moods'
  }
 }
+foreach($mood in 0..3){
+ $view.SetExpression($mood,$false);$view.SetFrame('moods',$mood,$false,100,0,0,-1,0)
+ Assert ([RasterCheck]::SameBytes($raw['moods'][$mood],$view.GetPixels())) "Idle mood must preserve its complete approved cel: $mood"
+}
 $ink=New-Object 'int[]' 1200
 foreach($span in @(@(20,290),@(320,580),@(620,880),@(900,1170))){foreach($y in $span[0]..$span[1]){$ink[$y]=50}}
 $method=$view.GetType().GetMethod('FindCuts',[Reflection.BindingFlags]'NonPublic,Static')
@@ -53,4 +58,4 @@ foreach($action in @('wave','stretch')){
  $s=Get-SpriteSample $action 12 12 140 0 0 'happy' $false $p
  Assert ($s.frame -eq 15) 'The complete 16-frame gesture must play'
 }
-"PASS: $count action/frame/expression combinations, adaptive gutters, pose margins, retained panel texture, quota moods and timed stretch peak"
+"PASS: $count action/frame/expression combinations, exact idle mood cels, complete tears, adaptive gutters, pose margins, retained panel texture and timed stretch peak"

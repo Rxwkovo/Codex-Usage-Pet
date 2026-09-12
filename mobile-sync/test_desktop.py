@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 
 from desktop import ConnectionDeadline, DesktopBridge, atomic_json, make_desktop_server, read_json
-from protocol import certificate
+from protocol import SourceConcurrencyLimit, SourceRateLimit, certificate
 
 
 def quota():
@@ -239,6 +239,13 @@ class SecurityTests(unittest.TestCase):
                 self.request('/usage', bad)
             self.assertEqual(caught.exception.code, 401)
 
+    def test_oversized_headers_are_rejected_before_route_handling(self):
+        context = ssl.create_default_context(cafile=str(self.cert))
+        with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=5) as raw:
+            with context.wrap_socket(raw, server_hostname='127.0.0.1') as connection:
+                connection.sendall(b'GET /usage HTTP/1.1\r\nX-Fill: '+b'x'*9000+b'\r\n\r\n')
+                self.assertIn(b'431', connection.recv(4096).split(b'\r\n', 1)[0])
+
     def test_only_the_two_documented_paths_are_served(self):
         token = self.token()
         for path in ('/', '/devices.json', '/server.pem', '/key.pem', '/usage.json',
@@ -257,6 +264,24 @@ class SecurityTests(unittest.TestCase):
                 codes.append(error.code)
         self.assertIn(429, codes, 'the request rate must be bounded')
         self.assertEqual(codes[0], 200)
+
+
+class LimitTests(unittest.TestCase):
+    def test_new_sources_cannot_grow_rate_limit_memory_past_its_cap(self):
+        limiter = SourceRateLimit(10, window=600, max_sources=2)
+        self.assertTrue(limiter.allow('192.168.1.1'))
+        self.assertTrue(limiter.allow('192.168.1.2'))
+        self.assertFalse(limiter.allow('192.168.1.3'))
+        self.assertEqual(set(limiter.hits), {'192.168.1.1', '192.168.1.2'})
+
+    def test_one_source_cannot_occupy_all_tls_workers(self):
+        limiter = SourceConcurrencyLimit(4)
+        requests = [object() for _ in range(5)]
+        for request in requests[:4]:
+            self.assertTrue(limiter.acquire(request, '192.168.1.9'))
+        self.assertFalse(limiter.acquire(requests[4], '192.168.1.9'))
+        limiter.release(requests[0])
+        self.assertTrue(limiter.acquire(requests[4], '192.168.1.9'))
 
 
 if __name__ == '__main__': unittest.main()

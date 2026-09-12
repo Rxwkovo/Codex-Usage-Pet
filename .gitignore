@@ -21,3 +21,4 @@ android/local.properties
 *.jks
 *.keystore
 bridge/__pycache__/
+.venv*/

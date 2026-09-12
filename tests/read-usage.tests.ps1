@@ -43,6 +43,7 @@ try {
  }
  Assert ($first.status -eq 'unavailable') 'An unreadable quota must be reported as unavailable'
  Assert ($null -eq $first.fiveHour -and $null -eq $first.weekly) 'An unavailable quota must not invent numbers'
+ Assert ($first.failureCount -eq 1) 'The first failed refresh must start the consecutive failure count'
 
  # 2. A previous good reading: it must be kept as stale instead of being wiped, because
  #    the pet shows the last known numbers until they are refreshed successfully.
@@ -53,6 +54,10 @@ try {
  Assert ($cached.status -eq 'stale') 'A cached reading must be downgraded to stale, not deleted'
  Assert ($cached.fiveHour.remaining -eq 42 -and $cached.weekly.remaining -eq 77) 'The last known numbers must survive a failed refresh'
  Assert ($cached.updatedAt -eq 1234) 'The timestamp of the cached reading must be preserved'
+ Assert ($cached.failureCount -eq 1) 'A good cached reading with no prior failure starts at one failure'
+ Assert ((Invoke-Worker) -eq 0) 'A repeated failed refresh must still exit 0'
+ $repeated=Read-UsageFile
+ Assert ($repeated.failureCount -eq 2) 'Consecutive failures must accumulate for the UI alert threshold'
 
  # 3. A corrupt previous reading: it must not stop the refresh from publishing.
  [IO.File]::WriteAllText($output,'{ not json',(New-Object Text.UTF8Encoding($false)))
@@ -60,6 +65,7 @@ try {
  $recovered=Read-UsageFile
  Assert ($recovered.status -eq 'unavailable') 'A corrupt cached reading must fall back to unavailable'
  Assert ($null -eq $recovered.fiveHour) 'A corrupt cached reading must not be half-parsed'
+ Assert ($recovered.failureCount -eq 1) 'A corrupt cache starts a fresh failure count'
  Assert (-not (Test-Path -LiteralPath $tempFile)) 'The temporary file must not survive a corrupt publish'
  'PASS: read-usage failure paths, cached reading preservation, atomic publish'
 } finally {

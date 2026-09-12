@@ -1,17 +1,38 @@
 package dev.rxwkovo.codexpet
 
+import java.net.URL
 import kotlin.math.*
+
+private fun privateIpv4(host:String, allowLoopback:Boolean=false):Boolean {
+    val parts=host.split('.')
+    if(parts.size!=4 || parts.any{!it.matches(Regex("[0-9]{1,3}"))})return false
+    val ip=parts.map{it.toIntOrNull()?:return false}
+    if(ip.any{it !in 0..255})return false
+    return (allowLoopback && ip[0]==127) || ip[0]==10 ||
+        (ip[0]==172 && ip[1] in 16..31) || (ip[0]==192 && ip[1]==168)
+}
 
 object WirelessEndpoint {
     fun parse(value:String):String {
+        require(value.length<=64)
         val parts=value.trim().removePrefix("https://").trimEnd('/').split(':')
         require(parts.size in 1..2)
-        val ip=parts[0].split('.').map{require(it.matches(Regex("[0-9]{1,3}")));it.toInt().also{v->require(v in 0..255)}}
-        require(ip.size==4)
-        require(ip[0]==10 || (ip[0]==172 && ip[1] in 16..31) || (ip[0]==192 && ip[1]==168))
+        require(privateIpv4(parts[0]))
         val port=if(parts.size==2)parts[1].toInt() else 47831
         require(port in 1..65535)
-        return "https://${ip.joinToString(".")}:$port"
+        return "https://${parts[0].split('.').joinToString("."){it.toInt().toString()}}:$port"
+    }
+}
+
+object PairingEndpoint {
+    fun parse(value:String):String {
+        require(value.length<=128)
+        val url=URL(value)
+        require(url.protocol=="https" && url.userInfo==null && url.query==null && url.ref==null)
+        require(url.path.isEmpty() || url.path=="/")
+        require(url.port in 1..65535)
+        require(privateIpv4(url.host,allowLoopback=true))
+        return "https://${url.host}:${url.port}"
     }
 }
 

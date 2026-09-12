@@ -8,6 +8,7 @@ import base64
 import ctypes
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import os
@@ -22,7 +23,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import qrcode
-from protocol import Bridge, SourceRateLimit, certificate, is_lan_ip, sanitize
+from protocol import Bridge, SourceConcurrencyLimit, SourceRateLimit, certificate, is_lan_ip, sanitize
+
+# BaseHTTPRequestHandler otherwise accepts roughly 6 MiB of headers per connection.
+# Keep the tiny local API bounded before any route or authentication code runs.
+http.client._MAXLINE = 8192
+http.client._MAXHEADERS = 32
 
 
 def atomic_json(path, data):
@@ -285,13 +291,17 @@ def make_desktop_server(bridge, host, port, cert, key, deadline_seconds=15):
             self.slots = threading.BoundedSemaphore(16)
             self.deadline = ConnectionDeadline(deadline_seconds)
             self.limiter = SourceRateLimit(60)
+            self.peers = SourceConcurrencyLimit(4)
             super().__init__((host, port), Handler)
             self.deadline.start()
 
         def verify_request(self, request, client_address):
             # Enforce the "LAN only" promise in code instead of relying on the firewall
             # rule alone: a source routable from outside must never reach a handler.
-            return is_lan_ip(client_address[0]) or client_address[0] == '127.0.0.1'
+            address = client_address[0]
+            if not (is_lan_ip(address) or address == '127.0.0.1'):
+                return False
+            return self.peers.acquire(request, address)
 
         def get_request(self):
             sock, address = self.socket.accept()
@@ -306,6 +316,7 @@ def make_desktop_server(bridge, host, port, cert, key, deadline_seconds=15):
 
         def shutdown_request(self, request):
             self.deadline.discard(request)
+            self.peers.release(request)
             super().shutdown_request(request)
 
         def process_request(self, request, address):
@@ -313,6 +324,7 @@ def make_desktop_server(bridge, host, port, cert, key, deadline_seconds=15):
                 # Nothing can be reported in HTTP before the handshake, so just drop it.
                 # The absolute deadline above is what stops this from lasting forever.
                 self.deadline.discard(request)
+                self.peers.release(request)
                 request.close()
                 return
             try:

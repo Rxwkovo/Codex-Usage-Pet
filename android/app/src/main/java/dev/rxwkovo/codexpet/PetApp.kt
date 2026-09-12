@@ -99,18 +99,26 @@ class PetStore(private val context: Context) {
     fun pair(code:String, done:(String?)->Unit) {
         if(inFlight){done("正在同步，请稍后重试");return}
         val spec=try {
-            require(code.trim().startsWith("mdt1:"))
-            JSONObject(String(Base64.decode(code.trim().removePrefix("mdt1:"),Base64.URL_SAFE or Base64.NO_WRAP))).also{
-                val u=URL(it.getString("url"));require(u.protocol=="https" && u.userInfo==null && u.query==null && u.ref==null)
+            val trimmed=code.trim()
+            require(trimmed.length in 40..2048 && trimmed.startsWith("mdt1:"))
+            val encoded=trimmed.removePrefix("mdt1:")
+            require(encoded.matches(Regex("[A-Za-z0-9_-]+={0,2}")))
+            val decoded=Base64.decode(encoded,Base64.URL_SAFE or Base64.NO_WRAP)
+            require(decoded.size<=1024)
+            JSONObject(String(decoded,Charsets.UTF_8)).also{
+                require(it.keys().asSequence().toSet()==setOf("url","pin","code"))
+                it.put("url",PairingEndpoint.parse(it.getString("url")))
                 require(it.getString("pin").matches(Regex("[a-f0-9]{64}")))
-                require(it.getString("code").length>=24)
+                require(it.getString("code").matches(Regex("[A-Za-z0-9_-]{32,128}")))
             }
         }catch(e:Exception){done("配对码无效，请从电脑同步端重新复制");return}
         inFlight=true;val ticket=++generation
         executor.execute {
             try {
                 val reply=request(spec,"/pair",spec.getString("code"),true)
-                spec.put("token",JSONObject(reply).getString("token")).remove("code")
+                val token=JSONObject(reply).getString("token")
+                require(token.matches(Regex("[A-Za-z0-9_-]{32,128}")))
+                spec.put("token",token).remove("code")
                 val encrypted=seal(spec.toString())
                 main.post{inFlight=false;if(ticket==generation){prefs.edit().putString("pairing",encrypted).apply();invalidateAddress();paired=true;demo=false;message="配对成功";done(null);refresh()}}
             }catch(e:Exception){main.post{inFlight=false;if(ticket==generation)done(connectionError(e))}}
@@ -131,6 +139,9 @@ class PetStore(private val context: Context) {
     }
     private fun request(spec:JSONObject,path:String,secret:String,post:Boolean):String {
         val pin=spec.getString("pin")
+        require(pin.matches(Regex("[a-f0-9]{64}")))
+        require(secret.matches(Regex("[A-Za-z0-9_-]{32,128}")))
+        val endpoint=PairingEndpoint.parse(spec.getString("url"))
         val tm=object:X509TrustManager {
             override fun getAcceptedIssuers()=emptyArray<X509Certificate>()
             override fun checkClientTrusted(c:Array<X509Certificate>,a:String){throw java.security.cert.CertificateException()}
@@ -143,7 +154,7 @@ class PetStore(private val context: Context) {
         }
         val ssl=SSLContext.getInstance("TLS").apply{init(null,arrayOf(tm),null)}
         // Bypass HTTP proxy settings for LAN traffic; OS-level VPN routing still applies.
-        val conn=URL(spec.getString("url").trimEnd('/')+path).openConnection(Proxy.NO_PROXY) as HttpsURLConnection
+        val conn=URL(endpoint+path).openConnection(Proxy.NO_PROXY) as HttpsURLConnection
         conn.sslSocketFactory=ssl.socketFactory
         // Certificate identity is explicitly bound by the pairing fingerprint, including LAN IP changes.
         conn.hostnameVerifier=HostnameVerifier{_,session->try{val cert=session.peerCertificates[0];MessageDigest.getInstance("SHA-256").digest(cert.encoded).joinToString(""){"%02x".format(it)}==pin}catch(e:Exception){false}}

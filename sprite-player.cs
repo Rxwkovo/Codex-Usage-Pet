@@ -49,7 +49,7 @@ public sealed class PetSpriteView : FrameworkElement
             var regions=new ScreenRegion[sheets[key].Length];
             for(int i=0;i<regions.Length;i++)regions[i]=new ScreenRegion(sheets[key][i]);
             screens.Add(key,regions);
-            var faces=new ScreenRegion[8];for(int i=0;i<8;i++)faces[i]=new ScreenRegion(faceArt[key][i]);faceRegions.Add(key,faces);
+            var faces=new ScreenRegion[8];for(int i=0;i<8;i++)faces[i]=new ScreenRegion(faceArt[key][i],key!="compact");faceRegions.Add(key,faces);
         }
     }
     sealed class ScreenRegion
@@ -57,7 +57,7 @@ public sealed class PetSpriteView : FrameworkElement
         public bool[] mask=new bool[W*H];
         public FacePaint paint;
         public double cx,cy,c,s,left=1e6,right=-1e6,top=1e6,bottom=-1e6;
-        public ScreenRegion(byte[] p)
+        public ScreenRegion(byte[] p,bool separateTear=false)
         {
             // A resting face may touch the body's ink outline. Find the thick
             // panel core first so connected thin outlines cannot become a face.
@@ -86,7 +86,7 @@ public sealed class PetSpriteView : FrameworkElement
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy;xxSum+=x*x;yySum+=y*y;xySum+=x*y;}
             double angle=.5*Math.Atan2(2*xySum,xxSum-yySum);c=Math.Cos(angle);s=Math.Sin(angle);
             for(int i=0;i<mask.Length;i++)if(mask[i]){double x=i%W-cx,y=i/W-cy,u=x*c+y*s,v=-x*s+y*c;left=Math.Min(left,u);right=Math.Max(right,u);top=Math.Min(top,v);bottom=Math.Max(bottom,v);}
-            paint=new FacePaint(p,mask);
+            paint=new FacePaint(p,mask,cx,cy,c,s,left,right,top,bottom,separateTear);
         }
         static bool Dark(byte[] p,int i){i*=4;return p[i+3]>240&&p[i]<90&&p[i+1]<105&&p[i+2]<65;}
         static double Cross(Point a,Point b,Point c){return (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);}
@@ -109,17 +109,26 @@ public sealed class PetSpriteView : FrameworkElement
         public byte[] clean;
         public bool[] ink;
         short[] delta;
-        public FacePaint(byte[] pixels,bool[] mask){
+        double[] tear;
+        public FacePaint(byte[] pixels,bool[] mask,double faceCx,double faceCy,double faceC,double faceS,double faceLeft,double faceRight,double faceTop,double faceBottom,bool separateTear){
             int right=0,bottom=0;l=W;t=H;
             for(int i=0;i<mask.Length;i++)if(mask[i]){l=Math.Min(l,i%W);t=Math.Min(t,i/W);right=Math.Max(right,i%W);bottom=Math.Max(bottom,i/W);}
+            // The hand-drawn tear deliberately hangs beyond the dark screen. Keep
+            // a small collar around the panel so it is transferred as one shape.
+            int margin=14*Density;l=Math.Max(0,l-margin);t=Math.Max(0,t-margin);right=Math.Min(W-1,right+margin);bottom=Math.Min(H-1,bottom+margin);
             w=right-l+1;h=bottom-t+1;ink=new bool[w*h];clean=new byte[w*h*3];delta=new short[w*h*3];
+            tear=new double[w*h*4];
             var seed=new bool[w*h];var valid=new bool[w*h];double[] average=new double[3];int count=0;
             for(int y=0;y<h;y++)for(int x=0;x<w;x++){
                 int j=y*w+x,p=(t+y)*W+l+x;valid[j]=mask[p];
                 for(int k=0;k<3;k++)clean[j*3+k]=pixels[p*4+k];
-                if(!valid[j])continue;
                 int b=pixels[p*4],g=pixels[p*4+1],r=pixels[p*4+2];
-                seed[j]=Math.Max(b,Math.Max(g,r))>112||(r>70&&r>g*1.08);
+                double gx=l+x-faceCx,gy=t+y-faceCy,u=gx*faceC+gy*faceS,v=-gx*faceS+gy*faceC;
+                bool tearZone=u>faceLeft+(faceRight-faceLeft)*.62&&v>faceTop+(faceBottom-faceTop)*.42;
+                double tearStrength=separateTear&&tearZone?Math.Max(0,Math.Min(1,(b-r-60)/20.0)):0;
+                if(pixels[p*4+3]>128&&b>210&&g>170&&tearStrength>0){tear[j*4]=tearStrength;tear[j*4+1]=b*tearStrength;tear[j*4+2]=g*tearStrength;tear[j*4+3]=r*tearStrength;}
+                if(!valid[j])continue;
+                seed[j]=tearStrength==0&&(Math.Max(b,Math.Max(g,r))>112||(r>70&&r>g*1.08));
             }
             int radius=Density;
             for(int y=0;y<h;y++)for(int x=0;x<w;x++)if(seed[y*w+x])for(int dy=-radius;dy<=radius;dy++)for(int dx=-radius;dx<=radius;dx++){
@@ -150,11 +159,20 @@ public sealed class PetSpriteView : FrameworkElement
             double x=px-l,y=py-t;int x0=(int)Math.Floor(x),y0=(int)Math.Floor(y);double fx=x-x0,fy=y-y0;
             return At(x0,y0,channel)*(1-fx)*(1-fy)+At(x0+1,y0,channel)*fx*(1-fy)+At(x0,y0+1,channel)*(1-fx)*fy+At(x0+1,y0+1,channel)*fx*fy;
         }
+        double TearAt(int x,int y,int channel){return x<0||y<0||x>=w||y>=h?0:tear[(y*w+x)*4+channel];}
+        public double SampleTear(double px,double py,int channel){
+            double x=px-l,y=py-t;int x0=(int)Math.Floor(x),y0=(int)Math.Floor(y);double fx=x-x0,fy=y-y0;
+            return TearAt(x0,y0,channel)*(1-fx)*(1-fy)+TearAt(x0+1,y0,channel)*fx*(1-fy)+TearAt(x0,y0+1,channel)*(1-fx)*fy+TearAt(x0+1,y0+1,channel)*fx*fy;
+        }
     }
     byte[] Compose(string key,int frame)
     {
         string id=key+":"+frame+":"+expression;byte[] result;
         if(composed.TryGetValue(id,out result))return result;
+        // The idle atlas already contains the approved complete open and closed
+        // drawings. Returning its requested cel directly preserves the full tear
+        // and the original paper texture instead of re-compositing it onto itself.
+        if(key=="moods"&&expression<4&&frame==expression)return sheets[key][expression];
         result=(byte[])sheets[key][frame].Clone();var dst=screens[key][frame];var src=faceRegions[key][expression];
         dst.paint.ClearMarks(result);
         // One uniform fit preserves the proportions of hand-drawn features.
@@ -165,6 +183,17 @@ public sealed class PetSpriteView : FrameworkElement
             double b=(src.top+src.bottom)/2+(-x*dst.s+y*dst.c-(dst.top+dst.bottom)/2)/scale;
             double px=src.cx+a*src.c-b*src.s,py=src.cy+a*src.s+b*src.c;
             for(int k=0;k<3;k++)result[i*4+k]=(byte)Math.Max(0,Math.Min(result[i*4+3],result[i*4+k]+src.paint.Sample(px,py,k)));
+        }
+        // Tears extend past the screen boundary, so transfer their cyan paint in
+        // a second pass instead of clipping it to dst.mask.
+        if(expression%4==3&&key!="compact")for(int i=0;i<W*H;i++){
+            double x=i%W-dst.cx,y=i/W-dst.cy;
+            double a=(src.left+src.right)/2+(x*dst.c+y*dst.s-(dst.left+dst.right)/2)/scale;
+            double b=(src.top+src.bottom)/2+(-x*dst.s+y*dst.c-(dst.top+dst.bottom)/2)/scale;
+            double px=src.cx+a*src.c-b*src.s,py=src.cy+a*src.s+b*src.c;
+            double alpha=Math.Max(0,Math.Min(1,src.paint.SampleTear(px,py,0)));
+            if(alpha<.01)continue;
+            for(int k=0;k<3;k++)result[i*4+k]=(byte)Math.Max(0,Math.Min(result[i*4+3],result[i*4+k]*(1-alpha)+src.paint.SampleTear(px,py,k+1)));
         }
         while(compositionOrder.Count>=48)composed.Remove(compositionOrder.Dequeue());
         composed.Add(id,result);compositionOrder.Enqueue(id);return result;

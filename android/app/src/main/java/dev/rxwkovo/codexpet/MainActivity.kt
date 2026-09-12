@@ -96,7 +96,7 @@ class MainActivity:Activity() {
         options.addView(Switch(this).apply{text="演示表情（不代表真实额度）";setTextColor(ink);isChecked=store.demo;setOnCheckedChangeListener{_,v->store.setDemo(v)}})
         val moods=LinearLayout(this);options.addView(moods)
         listOf("平静","开心","担忧","难过").forEachIndexed{i,label->moods.addView(button(label){store.demoMood=i;store.setDemo(true);pet.action("idle")},chipParams())}
-        column.addView(text("码团 Android 0.2.1 · 动作同步桌面 v2.2.1\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
+        column.addView(text("码团 Android 0.2.2 · 动作同步桌面 v2.2.2\n电脑离线时额度不会更新；登录凭据留在电脑。",12f))
         render()
     }
     private fun render(){

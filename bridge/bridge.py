@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import math
@@ -28,6 +29,10 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+# Bound request-line/header parsing before route handling or authentication.
+http.client._MAXLINE = 8192
+http.client._MAXHEADERS = 32
 
 
 def lan_candidates():
@@ -136,7 +141,7 @@ def _replace(path, data):
 
 
 def certificate(state, host):
-    # The standalone bridge and the v2.2.1 desktop service share this state directory
+    # The standalone bridge and the v2.2.2 desktop service share this state directory
     # by default and neither locked it here, so their first runs could interleave and
     # leave a key that does not match the certificate. load_cert_chain then failed on
     # every later start until both files were deleted by hand; a mismatched pair is
@@ -179,6 +184,10 @@ class SourceRateLimit:
     def allow(self, address):
         now = time.monotonic()
         with self.lock:
+            if address not in self.hits and len(self.hits) >= self.max_sources:
+                self.hits = {k: v for k, v in self.hits.items() if now - v[1] < self.window}
+                if len(self.hits) >= self.max_sources:
+                    return False
             count, started = self.hits.get(address, (0, now))
             if now - started >= self.window:
                 count, started = 0, now
@@ -186,11 +195,37 @@ class SourceRateLimit:
                 self.hits[address] = (count, started)
                 return False
             self.hits[address] = (count + 1, started)
-            if len(self.hits) > self.max_sources:
-                self.hits = {k: v for k, v in self.hits.items() if now - v[1] < self.window}
-                if len(self.hits) > self.max_sources:
-                    return False
             return True
+
+
+class SourceConcurrencyLimit:
+    """Prevent one LAN peer from occupying every bounded TLS worker."""
+
+    def __init__(self, limit=4):
+        self.limit = limit
+        self.lock = threading.Lock()
+        self.counts = {}
+        self.accepted = {}
+
+    def acquire(self, request, address):
+        with self.lock:
+            count = self.counts.get(address, 0)
+            if count >= self.limit:
+                return False
+            self.counts[address] = count + 1
+            self.accepted[request] = address
+            return True
+
+    def release(self, request):
+        with self.lock:
+            address = self.accepted.pop(request, None)
+            if address is None:
+                return
+            count = self.counts.get(address, 0) - 1
+            if count > 0:
+                self.counts[address] = count
+            else:
+                self.counts.pop(address, None)
 
 
 class Bridge:
@@ -238,7 +273,7 @@ class Bridge:
             return token
 
     def authorized(self, token):
-        if not isinstance(token, str):
+        if not isinstance(token, str) or len(token) > 128:
             return False
         digest = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:
@@ -372,13 +407,17 @@ def make_server(bridge, host, port, cert, key, deadline_seconds=15):
             self.slots = threading.BoundedSemaphore(16)
             self.deadline = ConnectionDeadline(deadline_seconds)
             self.limiter = SourceRateLimit(60)
+            self.peers = SourceConcurrencyLimit(4)
             super().__init__((host, port), Handler)
             self.deadline.start()
 
         def verify_request(self, request, client_address):
             # Enforce the "LAN only" promise in code instead of relying on the firewall
             # rule alone: a source routable from outside must never reach a handler.
-            return is_lan_ip(client_address[0]) or client_address[0] == "127.0.0.1"
+            address = client_address[0]
+            if not (is_lan_ip(address) or address == "127.0.0.1"):
+                return False
+            return self.peers.acquire(request, address)
 
         def get_request(self):
             sock, address = self.socket.accept()
@@ -392,6 +431,7 @@ def make_server(bridge, host, port, cert, key, deadline_seconds=15):
 
         def shutdown_request(self, request):
             self.deadline.discard(request)
+            self.peers.release(request)
             super().shutdown_request(request)
 
         def process_request(self, request, address):
@@ -399,6 +439,7 @@ def make_server(bridge, host, port, cert, key, deadline_seconds=15):
                 # Nothing can be reported in HTTP before the handshake, so just drop it.
                 # The absolute deadline above is what stops this from lasting forever.
                 self.deadline.discard(request)
+                self.peers.release(request)
                 request.close()
                 return
             try:

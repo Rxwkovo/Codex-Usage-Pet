@@ -149,6 +149,10 @@ class SourceRateLimit:
     def allow(self, address):
         now = time.monotonic()
         with self.lock:
+            if address not in self.hits and len(self.hits) >= self.max_sources:
+                self.hits = {k: v for k, v in self.hits.items() if now - v[1] < self.window}
+                if len(self.hits) >= self.max_sources:
+                    return False
             count, started = self.hits.get(address, (0, now))
             if now - started >= self.window:
                 count, started = 0, now
@@ -156,11 +160,37 @@ class SourceRateLimit:
                 self.hits[address] = (count, started)
                 return False
             self.hits[address] = (count + 1, started)
-            if len(self.hits) > self.max_sources:
-                self.hits = {k: v for k, v in self.hits.items() if now - v[1] < self.window}
-                if len(self.hits) > self.max_sources:
-                    return False
             return True
+
+
+class SourceConcurrencyLimit:
+    """Prevent one LAN peer from occupying every bounded TLS worker."""
+
+    def __init__(self, limit=4):
+        self.limit = limit
+        self.lock = threading.Lock()
+        self.counts = {}
+        self.accepted = {}
+
+    def acquire(self, request, address):
+        with self.lock:
+            count = self.counts.get(address, 0)
+            if count >= self.limit:
+                return False
+            self.counts[address] = count + 1
+            self.accepted[request] = address
+            return True
+
+    def release(self, request):
+        with self.lock:
+            address = self.accepted.pop(request, None)
+            if address is None:
+                return
+            count = self.counts.get(address, 0) - 1
+            if count > 0:
+                self.counts[address] = count
+            else:
+                self.counts.pop(address, None)
 
 
 class Bridge:

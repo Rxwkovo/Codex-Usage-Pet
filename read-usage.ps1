@@ -78,11 +78,19 @@ try {
   if ($DirectOnly) { throw }
   $result = Read-OnlineUsage $false
  }
+ $result['failureCount']=0
 } catch {
  $result = @{status='unavailable';updatedAt=0;fiveHour=$null;weekly=$null}
+ $previousFailures=0
  if (Test-Path -LiteralPath $outputPath) {
-  try { $cached = Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json; $cached.status='stale'; $result=$cached } catch { }
+  try {
+   $cached = Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json
+   if($null -ne $cached.failureCount){$previousFailures=[Math]::Max(0,[int]$cached.failureCount)}
+   $cached.status='stale'; $result=$cached
+  } catch { }
  }
+ $result | Add-Member -NotePropertyName failureCount -NotePropertyValue ([Math]::Min(999,$previousFailures+1)) -Force
+ $result | Add-Member -NotePropertyName lastFailureAt -NotePropertyValue ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Force
 }
 $temp = "$outputPath.tmp"
 $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temp -Encoding UTF8

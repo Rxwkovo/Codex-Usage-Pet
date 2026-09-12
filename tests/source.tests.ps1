@@ -1,4 +1,4 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
 function Assert($condition,$message){if(-not $condition){throw $message}}
 
@@ -63,5 +63,13 @@ Assert ($inviteFunction.Groups[1].Value -notmatch '\$s=Get-MobileStatus') 'Test-
 #    executable on the machine. Bind its firewall rule to the bridge executable.
 $firewallText=[IO.File]::ReadAllText((Join-Path $root 'bridge/allow-wireless.ps1'))
 Assert ($firewallText -match 'New-NetFirewallRule[^\r\n]+-Program\s+\$exe') 'The standalone bridge firewall rule must be scoped to its executable'
+
+# 6. The tray is the always-visible control surface when the pet is compacted or hidden.
+#    Keep the recovery and frequently used controls there rather than only on the pet.
+$petText=[IO.File]::ReadAllText((Join-Path $root 'pet.ps1'))
+foreach($label in @('刷新 5 小时 / 一周用量','暂停 / 恢复随机动作','查看 Codex 用量页面','切换置顶')) {
+ Assert ($petText.Contains($label)) ('Tray quick action is missing: '+$label)
+}
+Assert ($petText.Contains('额度连续三次获取失败，请检查网络或 Codex 版本。')) 'Three consecutive quota failures must produce a visible user message'
 
 "PASS: $checked UTF-8 BOM PowerShell sources; $($frames.Count) Android frames at $expected; mobile settings source guards"

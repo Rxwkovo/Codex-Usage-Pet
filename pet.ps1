@@ -71,6 +71,7 @@ $script:worker = $null
 $script:workerStarted = [DateTime]::MinValue
 $script:nextRefresh = [DateTime]::MinValue
 $script:usageStamp = ''
+$script:lastFailureAlert = 0
 function Refresh-Usage {
  if ($Preview -or $Smoke) { return }
  if ($null -ne $script:worker) {
@@ -96,6 +97,11 @@ function Show-Usage {
  try {
   $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
   Set-UsageMood (Get-UsageMood $data -StaleSeconds $script:preferences.staleSeconds -HappyThreshold $script:preferences.happyThreshold -WorriedThreshold $script:preferences.worriedThreshold)
+  $failureCount=if($null -ne $data.failureCount){[int]$data.failureCount}else{0}
+  if($failureCount -ge 3) {
+   $pet.ToolTip='额度接口连续失败，请检查网络连接、登录状态或 Codex 版本。'
+   if($failureCount -gt $script:lastFailureAlert){Show-StatusMessage '额度连续三次获取失败，请检查网络或 Codex 版本。';$script:lastFailureAlert=$failureCount}
+  } elseif($data.status -eq 'ok') {$script:lastFailureAlert=0}
   $signature=@($data.fiveHour.remaining,$data.weekly.remaining,$data.fiveHour.resetsAt,$data.weekly.resetsAt) -join '|'
   if($data.status -eq 'ok') {
    if($null -ne $script:quotaSignature -and $signature -ne $script:quotaSignature -and $script:preferences.wakeOnUsage) {Wake-Pet}
@@ -127,7 +133,7 @@ function Show-Usage {
    $stamp = [DateTimeOffset]::FromUnixTimeSeconds($data.updatedAt).LocalDateTime.ToString('HH:mm')
    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()-$data.updatedAt
    $route = $(if ($data.route -eq 'direct') {'直连'} else {'系统网络'})
-   $sync.Text = $(if ($data.status -eq 'ok' -and $age -lt $script:preferences.staleSeconds) {$route+' '+$stamp+' · 悬停查看重置'} else {'缓存 '+$stamp+' · 连接待恢复'})
+   $sync.Text = $(if ($failureCount -ge 3) {'连续失败 '+$failureCount+' 次 · 请检查网络或 Codex'} elseif ($data.status -eq 'ok' -and $age -lt $script:preferences.staleSeconds) {$route+' '+$stamp+' · 悬停查看重置'} else {'缓存 '+$stamp+' · 连接待恢复'})
   } else { $sync.Text='未连接 · 请登录 Codex 后刷新' }
  } catch { Set-UsageMood (Get-UsageMood $null) }
 }
@@ -199,9 +205,8 @@ function Update-Behavior {
  $script:sprite.SetFrame($sample.key,$sample.frame,$sample.mirror,$t,$script:preferences.spriteTransition,$breath,$sample.alternate,$sample.mix)
 }
 $lines = @('我在。慢慢来，一起把它做好。','投喂一个好点子，我来长出代码。','正在收集你散落的灵感。','今天也要给自己留一点空白。','摸摸收到！灵感 +1。','小小一团，随叫随到。','写累了就看看远处吧。')
-function Say([string]$message) {
+function Show-StatusMessage([string]$message) {
  Wake-Pet
- $script:happyUntil=$script:clock.Elapsed.TotalSeconds+$script:preferences.happySeconds
  $speech.Text = $message
  $bubble.Visibility = 'Visible'
  if (-not $Preview -and -not $script:quiet) {
@@ -210,6 +215,10 @@ function Say([string]$message) {
   $bubble.BeginAnimation([Windows.UIElement]::OpacityProperty,$fade)
  }
  $script:bubbleUntil = [DateTime]::Now.AddSeconds($script:preferences.speechSeconds)
+}
+function Say([string]$message) {
+ $script:happyUntil=$script:clock.Elapsed.TotalSeconds+$script:preferences.happySeconds
+ Show-StatusMessage $message
 }
 function Bounce([double]$x, [double]$y) {
  foreach ($pair in @(@([Windows.Media.ScaleTransform]::ScaleXProperty,$x),@([Windows.Media.ScaleTransform]::ScaleYProperty,$y))) {
@@ -407,6 +416,14 @@ function Initialize-PetTray {
  $settings.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Show-PetSettings})})
  $mobile=$script:trayMenu.Items.Add('连接手机…')
  $mobile.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Show-PetSettings '手机连接'})})
+ $refresh=$script:trayMenu.Items.Add('刷新 5 小时 / 一周用量')
+ $refresh.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{Refresh-Usage; Show-StatusMessage '正在更新两档用量。'})})
+ $quiet=$script:trayMenu.Items.Add('暂停 / 恢复随机动作')
+ $quiet.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{$script:quiet=-not $script:quiet;Set-PetAction 'idle';Save-State;Show-StatusMessage $(if($script:quiet){'动作已暂停。'}else{'动作已恢复。'})})})
+ $usagePage=$script:trayMenu.Items.Add('查看 Codex 用量页面')
+ $usagePage.Add_Click({Start-Process 'https://chatgpt.com/codex/settings/usage'})
+ $top=$script:trayMenu.Items.Add('切换置顶')
+ $top.Add_Click({[void]$window.Dispatcher.BeginInvoke([Action]{$window.Topmost=-not $window.Topmost;Save-State})})
  [void]$script:trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
  $script:trayExit=$script:trayMenu.Items.Add('退出码团')
  $script:trayExit.Add_Click({if($null -ne $script:settingsWindow){$script:settingsWindow.Close()}; $window.Close()})

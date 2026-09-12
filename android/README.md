@@ -1,13 +1,13 @@
-# 码团 Android · 0.2.1 预览版
+# 码团 Android · 0.2.2 预览版
 
 一个 APK，包含额度面板、设置和可以在其他应用上方活动的手绘码团。Android 8.0 及以上。
 
 ## 手机安装
 
-安装 `CodexPet-Android-0.2.1-preview.apk`，可覆盖 0.2.0 并保留配对。本版为调试签名的预览包，尚非应用商店发行版。
+安装 `CodexPet-Android-0.2.2-preview.apk`，可覆盖 0.2.1 并保留配对。本版为调试签名的预览包，尚非应用商店发行版。
 
 本版同步桌面 v2.1.2 的 440×420 高清动作：挥手/伸展各 16 帧，所有动作保持当前额度的四种表情并独立眨眼，睡下时使用闭眼表情；伸展顶点停留默认 18%，可调整到 0–40%。保留薄荷色按钮、按压缩放与水波反馈。
-0.2.1 已在 Redmi Note 13 Pro+ / Android 15 验证从 0.2.0 覆盖安装、保留旧配对、真实 Wi-Fi 加密额度同步、悬浮服务、动作分发与正常收起；此前也验证过从 USB 测试地址切换 Wi-Fi 和实际窗口走动。单台手机测试不代表所有厂商后台策略均兼容。
+0.2.2 增加配对输入安全边界：只接受私有局域网 IPv4 或 USB 本机地址，拒绝公网地址，并限制配对码、证书指纹、邀请和令牌的格式及大小。真机验证记录见 `VERIFICATION-0.2.2.md`。单台手机测试不代表所有厂商后台策略均兼容。
 
 1. 打开码团，可以直接预览走动、坐下、休息、伸展、招手和缩团。
 2. 点击「开启悬浮码团」，按系统提示授予悬浮窗、通知权限，再返回开启。
@@ -30,7 +30,7 @@
 
 电脑同步端显示一次性配对码，并将二维码保存到 `%LOCALAPPDATA%\CodexUsagePet\android-bridge\pairing.png`。
 手机可粘贴配对码，或先把二维码原图传到手机，再点「导入配对二维码」。本版尚无实时相机扫码。
-配对码 10 分钟有效、只可使用一次；再次配对请重新启动同步端。不要把配对码公开发布。
+配对码 10 分钟有效、只可使用一次；再次配对请重新启动同步端。手机只接受电脑生成的私有局域网地址或 USB 本机测试地址。不要把配对码公开发布。
 
 配对后每分钟尝试读取额度。桌面端使用已有只读 `read-usage.ps1`，不读取 Codex 登录文件。
 只同步五小时、一周百分比及重置/更新时间。HTTPS 固定配对证书指纹；手机使用 Android Keystore 加密配对信息，关闭备份和设备迁移。
@@ -49,7 +49,7 @@ IP 变化或从 USB 转无线时，在 App「连接电脑 → 切换无线地址
 520 张透明高清成品帧由 [Windows v2.1.2](https://github.com/Rxwkovo/Codex-Usage-Pet/tree/v2.1.2) 原播放器导出：8 张待机表情 + 64 个动作姿势 × 8 种情绪/睁闭眼组合。图像按需解码，每个视图最多缓存约 12 MiB，避免一次装入全部高清帧。
 重新导出时，将 v2.1.2 源码放在独立目录，运行 `./export-frames.ps1 -WindowsSource 该目录`。Android 直接使用提交的成品帧，正常构建无需 Windows WPF。
 
-Android Gradle Plugin 9.1.1，Gradle Wrapper 9.3.1，compile SDK 37，target SDK 35。
+Android Gradle Plugin 9.1.1，Gradle Wrapper 9.3.1，ZXing 3.5.4，compile SDK 37，target SDK 35。
 推荐 Android Studio 自带 JDK。Windows 中文路径请运行：
 
 ```powershell
@@ -57,7 +57,7 @@ Android Gradle Plugin 9.1.1，Gradle Wrapper 9.3.1，compile SDK 37，target SDK
 ```
 
 脚本在当前用户临时英文目录中编译以避免测试类加载失败；产物复制到本目录 `dist`。
-它运行 APK 打包、10 项领域逻辑单元测试与 Android Lint。首次构建需要下载依赖。
+它运行 APK 打包、11 项领域逻辑单元测试与 Android Lint。首次构建需要下载依赖。
 
 电脑服务源码见 `../bridge`。TLS、一次性配对、未授权访问与敏感字段过滤测试：
 

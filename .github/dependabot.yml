@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /mobile-sync
+    schedule: { interval: monthly }
+  - package-ecosystem: pip
+    directory: /bridge
+    schedule: { interval: monthly }
+  - package-ecosystem: gradle
+    directory: /android
+    schedule: { interval: monthly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }

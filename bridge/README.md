@@ -1,6 +1,6 @@
 # 电脑无线同步端
 
-与 Android 0.2.1 配套，协议兼容 0.1.x。电脑运行 `CodexPet-Sync-Bridge.exe`，选择已连接的 Wi-Fi 地址，按提示完成手机配对。`--open-qr` 可打开本地二维码图片。
+与 Android 0.2.2 配套，协议兼容 0.1.x。电脑运行 `CodexPet-Sync-Bridge.exe`，选择已连接的 Wi-Fi 地址，按提示完成手机配对。`--open-qr` 可打开本地二维码图片。
 
 选项：`--host 局域网IPv4`、`--port 47831`、`--reset` 撤销配对、`--state-dir 目录` 使用已有同步实例的状态。状态目录决定电脑证书和已授权设备；更改目录后，手机需要重新配对。
 

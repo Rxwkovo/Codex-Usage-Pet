@@ -30,6 +30,15 @@ class DomainTest {
         assertFalse(quota(101.0,80.0).fresh(1050))
         assertFalse(quota(-1.0,80.0).fresh(1050))
     }
+    @Test fun pairingEndpointAcceptsOnlyExplicitPrivateOrUsbAddresses(){
+        assertEquals("https://192.168.3.44:47831",PairingEndpoint.parse("https://192.168.3.44:47831"))
+        assertEquals("https://127.0.0.1:47831",PairingEndpoint.parse("https://127.0.0.1:47831/"))
+        listOf("https://8.8.8.8:47831","https://example.com:47831","https://192.168.3.44",
+            "http://192.168.3.44:47831","https://192.168.3.44:47831/path",
+            "https://192.168.3.44:47831?x=1","https://192.168.3.44:47831@evil.com").forEach{
+            try{PairingEndpoint.parse(it);fail("Accepted invalid pairing endpoint: $it")}catch(expected:IllegalArgumentException){}
+        }
+    }
     @Test fun computerAndPhoneClockSkewDoesNotExpireFreshData(){
         val u=Usage(WindowQuota(80.0,2000),WindowQuota(70.0,3000),950,"ok",1000,5000)
         assertTrue(u.fresh(5050))
