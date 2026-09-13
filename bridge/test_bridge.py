@@ -8,10 +8,16 @@ import ssl
 import urllib.request
 import urllib.error
 from pathlib import Path
-from bridge import (Bridge, ConnectionDeadline, SourceConcurrencyLimit,
+import bridge as standalone
+from bridge import (POLICY, Bridge, ConnectionDeadline, SourceConcurrencyLimit,
                     SourceRateLimit, certificate, make_server, sanitize, is_lan_ip)
+from sync_core import Bridge as CoreBridge, sanitize as core_sanitize
 
 class BridgeTests(unittest.TestCase):
+    def test_standalone_entry_uses_the_root_core(self):
+        self.assertIs(standalone.Bridge, CoreBridge)
+        self.assertIs(standalone.sanitize, core_sanitize)
+
     def test_lan_addresses_exclude_loopback_stale_link_local_and_public(self):
         for host in ("192.168.3.44", "10.0.0.1", "172.16.1.5"):
             self.assertTrue(is_lan_ip(host))
@@ -23,6 +29,22 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("secret",sanitize(data))
         data["weekly"]["remaining"]=float("nan")
         self.assertEqual(sanitize(data)["status"],"stale")
+
+    def test_versioned_policy_and_validity_boundaries(self):
+        now=1_000_000
+        base={"status":"ok","updatedAt":now,
+              "fiveHour":{"remaining":75,"resetsAt":now+1},
+              "weekly":{"remaining":5,"resetsAt":now+2}}
+        legacy=sanitize(base,now=now)
+        self.assertEqual(legacy["protocolVersion"],2)
+        self.assertEqual(legacy["policy"],POLICY)
+        self.assertEqual(legacy["status"],"ok")
+        for updated_at,expected in ((now-119,"ok"),(now-120,"stale"),(now+5,"ok"),(now+6,"stale")):
+            self.assertEqual(sanitize(dict(base,updatedAt=updated_at),now=now)["status"],expected)
+        missing=dict(base);missing["weekly"]=None
+        self.assertEqual(sanitize(missing,now=now)["status"],"stale")
+        reset=dict(base);reset["fiveHour"]={"remaining":75,"resetsAt":now}
+        self.assertEqual(sanitize(reset,now=now)["status"],"stale")
 
     def test_tls_pairing_one_use_and_authorization(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,6 +146,7 @@ class SecurityTests(unittest.TestCase):
         (state / "usage.json").write_text(json.dumps(dict(
             status="ok", updatedAt=now, fiveHour=dict(remaining=76, resetsAt=now+3600),
             weekly=dict(remaining=24, resetsAt=now+86400),
+            protocolVersion=999, policy=dict(staleSeconds=999999, secret="MUST NOT LEAK"),
             chatContent="MUST NOT LEAK", privateField="MUST NOT LEAK")), encoding="utf-8")
         self.bridge = Bridge(state)
         cert, key, _ = certificate(state, "127.0.0.1")
@@ -153,8 +176,10 @@ class SecurityTests(unittest.TestCase):
 
     def test_usage_carries_only_the_documented_fields(self):
         body = self.call("/usage", self.token())
-        self.assertEqual(sorted(body), ["fiveHour", "serverTime", "status", "updatedAt", "weekly"])
+        self.assertEqual(sorted(body), ["fiveHour", "policy", "protocolVersion", "serverTime", "status", "updatedAt", "weekly"])
         self.assertIsInstance(body["serverTime"], int)
+        self.assertEqual(body["protocolVersion"], 2)
+        self.assertEqual(body["policy"], POLICY)
         self.assertEqual(sorted(body["fiveHour"]), ["remaining", "resetsAt"])
         raw = json.dumps(body)
         for leak in ("chatContent", "privateField", "MUST NOT LEAK"):

@@ -15,7 +15,9 @@ import urllib.error
 import urllib.request
 
 from desktop import ConnectionDeadline, DesktopBridge, atomic_json, make_desktop_server, read_json
-from protocol import SourceConcurrencyLimit, SourceRateLimit, certificate
+from protocol import (POLICY, Bridge as ProtocolBridge, SourceConcurrencyLimit,
+                      SourceRateLimit, certificate, sanitize)
+from sync_core import Bridge as CoreBridge, sanitize as core_sanitize
 
 
 def quota():
@@ -32,6 +34,38 @@ def client(cert, port):
                                    headers={'Authorization': 'Bearer '+token}, method=method)
         return json.loads(opener.open(r, timeout=4).read())
     return request
+
+
+class SharedCoreTests(unittest.TestCase):
+    def test_embedded_entry_uses_the_root_core(self):
+        self.assertIs(ProtocolBridge, CoreBridge)
+        self.assertIs(sanitize, core_sanitize)
+        self.assertIs(DesktopBridge.__mro__[1], CoreBridge)
+
+    def test_malformed_pairing_one_use_and_revoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = CoreBridge(Path(tmp))
+            for bad in (None, 7, '非 ASCII', 'x'*129, 'wrong'):
+                self.assertIsNone(bridge.pair(bad, '192.168.1.9'))
+            invite = bridge.invite
+            token = bridge.pair(invite, '192.168.1.9')
+            self.assertTrue(token)
+            stored = (Path(tmp)/'devices.json').read_text()
+            self.assertNotIn(token, stored)
+            self.assertIsNone(bridge.pair(invite, '192.168.1.9'))
+            self.assertTrue(bridge.authorized(token))
+            bridge.revoke()
+            self.assertFalse(bridge.authorized(token))
+            self.assertEqual(read_json(Path(tmp)/'devices.json'), [])
+
+    def test_credentials_are_not_part_of_the_usage_whitelist(self):
+        data = quota()
+        data.update(deviceToken='RAW_DEVICE_TOKEN', privateKey='PRIVATE_KEY_MATERIAL')
+        published = json.dumps(sanitize(data))
+        self.assertNotIn('deviceToken', published)
+        self.assertNotIn('RAW_DEVICE_TOKEN', published)
+        self.assertNotIn('privateKey', published)
+        self.assertNotIn('PRIVATE_KEY_MATERIAL', published)
 
 
 class DesktopProtocolTests(unittest.TestCase):
@@ -66,6 +100,25 @@ class DesktopProtocolTests(unittest.TestCase):
         for bad in ([], None, dict(status='ok', updatedAt=0), dict(quota(), updatedAt=int(time.time())+300)):
             atomic_json(self.source, bad)
             self.assertEqual(self.request('/usage', token)['status'], 'stale')
+
+    def test_versioned_policy_and_validity_boundaries(self):
+        now = 1_000_000
+        base = dict(status='ok', updatedAt=now, fiveHour=dict(remaining=76, resetsAt=now+1),
+                    weekly=dict(remaining=24, resetsAt=now+2))
+        legacy = sanitize(base, now=now)
+        self.assertEqual(legacy['protocolVersion'], 2)
+        self.assertEqual(legacy['policy'], POLICY)
+        self.assertEqual(legacy['status'], 'ok')
+
+        for updated_at, expected in ((now-119, 'ok'), (now-120, 'stale'),
+                                     (now+5, 'ok'), (now+6, 'stale')):
+            sample = dict(base, updatedAt=updated_at)
+            self.assertEqual(sanitize(sample, now=now)['status'], expected)
+
+        missing = dict(base); missing['weekly'] = None
+        self.assertEqual(sanitize(missing, now=now)['status'], 'stale')
+        reset = dict(base); reset['fiveHour'] = dict(remaining=76, resetsAt=now)
+        self.assertEqual(sanitize(reset, now=now)['status'], 'stale')
 
     def test_one_time_pairing_renewal_and_revocation(self):
         original = self.bridge.invite
@@ -201,6 +254,8 @@ class SecurityTests(unittest.TestCase):
         atomic_json(usage, dict(status='ok', updatedAt=now,
                                 fiveHour=dict(remaining=76, resetsAt=now+3600),
                                 weekly=dict(remaining=24, resetsAt=now+86400),
+                                protocolVersion=999,
+                                policy=dict(staleSeconds=999999, secret='MUST NOT LEAK'),
                                 chatContent='MUST NOT LEAK', privateField='MUST NOT LEAK'))
         self.bridge = DesktopBridge(state, usage, 10)
         self.cert, key, _ = certificate(state, '127.0.0.1')
@@ -223,8 +278,10 @@ class SecurityTests(unittest.TestCase):
 
     def test_usage_carries_only_the_documented_fields(self):
         body = self.request('/usage', self.token())
-        self.assertEqual(sorted(body), ['fiveHour', 'serverTime', 'status', 'updatedAt', 'weekly'])
+        self.assertEqual(sorted(body), ['fiveHour', 'policy', 'protocolVersion', 'serverTime', 'status', 'updatedAt', 'weekly'])
         self.assertIsInstance(body['serverTime'], int)
+        self.assertEqual(body['protocolVersion'], 2)
+        self.assertEqual(body['policy'], POLICY)
         self.assertEqual(sorted(body['fiveHour']), ['remaining', 'resetsAt'])
         self.assertEqual(sorted(body['weekly']), ['remaining', 'resetsAt'])
         # the extra keys that were in the file must not survive the whitelist

@@ -11,6 +11,6 @@
 3. 以管理员 PowerShell 运行 `./allow-wireless.ps1 -Address 电脑IP`，只放行随附的同步程序、本机选中接口的 TCP 端口和 LocalSubnet 来源；不会关闭防火墙。若程序不在脚本同目录，可另传 `-Program 完整路径`。IP 变化后需重新运行以更新规则。
 4. 手机已配对时，可使用「切换无线地址」；电脑的证书和设备令牌没有变化就不必解除配对。
 
-二维码/配对码有效期十分钟，一次使用；需要新配对码时重新启动同步端。凭据和私钥位于用户本地状态目录，禁止将该目录上传 GitHub。向手机只发送五小时/每周额度和时间信息。
+二维码/配对码有效期十分钟，一次使用；需要新配对码时重新启动同步端。凭据和私钥位于用户本地状态目录，禁止将该目录上传 GitHub。向手机只发送五小时/每周额度、时间信息和公开的状态判定策略。额度响应采用协议 v2；新增字段、有效期、情绪阈值和旧客户端回退规则见 [`../docs/usage-protocol-v2.md`](../docs/usage-protocol-v2.md)。
 
-源码启动：`./start.ps1`（Python 3.11+）。测试：`python -m unittest discover -s bridge -v`（在仓库根目录）。安装依赖后可运行 `./build.ps1` 重建单文件 `dist/CodexPet-Sync-Bridge.exe`。
+源码启动：`./start.ps1`（Python 3.11+）。独立桥与桌面内置同步服务共用仓库根目录的 `sync_core.py`，入口文件只保留命令行、刷新进程和 HTTPS 服务器差异。测试：`python -m unittest discover -s bridge -v`（在仓库根目录）。安装依赖后可运行 `./build.ps1` 重建单文件 `dist/CodexPet-Sync-Bridge.exe`。

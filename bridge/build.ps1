@@ -5,6 +5,7 @@ $dist=Join-Path $PSScriptRoot 'dist'
 $work=Join-Path $PSScriptRoot 'build'
 & $Python -m PyInstaller --noconfirm --clean --onefile --console --name CodexPet-Sync-Bridge `
  --distpath $dist --workpath $work --specpath $work `
+ --paths $root `
  --copy-metadata qrcode --copy-metadata Pillow --copy-metadata PyInstaller `
  --exclude-module numpy --exclude-module matplotlib --exclude-module tkinter --exclude-module pytest `
  --icon (Join-Path $root 'pet.ico') `

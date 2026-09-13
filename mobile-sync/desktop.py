@@ -122,27 +122,9 @@ class DesktopBridge(Bridge):
             self.attempts.clear()
 
     def revoke(self):
+        super().revoke()
         with self.lock:
-            # Commit revocation to disk before reporting it as effective.
-            atomic_json(self.tokens_file, [])
-            self.tokens = []
             self.last_seen.clear()
-            self.invite = None
-            self.expires = 0
-
-    def pair(self, code, address):
-        # Headers are untrusted. Bound their size and the source rate-limit map.
-        if len(code) > 128:
-            return None
-        with self.lock:
-            if len(self.attempts) > 256:
-                self.attempts = {k: v for k, v in self.attempts.items() if time.time()-v[1] < 60}
-                if len(self.attempts) > 256:
-                    return None
-        try:
-            return super().pair(code, address)
-        except (TypeError, UnicodeError):
-            return None
 
     def usage(self):
         data = read_json(self.usage_path, {})
