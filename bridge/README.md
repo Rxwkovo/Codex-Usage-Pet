@@ -13,4 +13,4 @@
 
 二维码/配对码有效期十分钟，一次使用；需要新配对码时重新启动同步端。凭据和私钥位于用户本地状态目录，禁止将该目录上传 GitHub。向手机只发送五小时/每周额度、时间信息和公开的状态判定策略。额度响应采用协议 v2；新增字段、有效期、情绪阈值和旧客户端回退规则见 [`../docs/usage-protocol-v2.md`](../docs/usage-protocol-v2.md)。
 
-源码启动：`./start.ps1`（Python 3.11+）。独立桥与桌面内置同步服务共用仓库根目录的 `sync_core.py`，入口文件只保留命令行、刷新进程和 HTTPS 服务器差异。测试：`python -m unittest discover -s bridge -v`（在仓库根目录）。安装依赖后可运行 `./build.ps1` 重建单文件 `dist/CodexPet-Sync-Bridge.exe`。
+源码启动：`./start.ps1`（Python 3.11+）。独立桥与桌面内置同步服务共用仓库根目录的 `sync_core.py` 和 `sync_server.py`；入口文件只保留命令行、数据来源、刷新进程和界面生命周期差异。退出独立桥时会终止当前刷新进程及其子进程，并释放监听端口。测试：`python -m unittest discover -s bridge -v`（在仓库根目录）。安装依赖后可运行 `./build.ps1` 重建单文件 `dist/CodexPet-Sync-Bridge.exe`。

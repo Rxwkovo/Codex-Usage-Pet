@@ -18,6 +18,8 @@ from desktop import ConnectionDeadline, DesktopBridge, atomic_json, make_desktop
 from protocol import (POLICY, Bridge as ProtocolBridge, SourceConcurrencyLimit,
                       SourceRateLimit, certificate, sanitize)
 from sync_core import Bridge as CoreBridge, sanitize as core_sanitize
+from sync_server import (ConnectionDeadline as CoreConnectionDeadline,
+                         make_bounded_server)
 
 
 def quota():
@@ -41,6 +43,8 @@ class SharedCoreTests(unittest.TestCase):
         self.assertIs(ProtocolBridge, CoreBridge)
         self.assertIs(sanitize, core_sanitize)
         self.assertIs(DesktopBridge.__mro__[1], CoreBridge)
+        self.assertIs(ConnectionDeadline, CoreConnectionDeadline)
+        self.assertIs(make_desktop_server, make_bounded_server)
 
     def test_malformed_pairing_one_use_and_revoke(self):
         with tempfile.TemporaryDirectory() as tmp:

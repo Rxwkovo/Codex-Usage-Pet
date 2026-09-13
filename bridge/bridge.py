@@ -5,19 +5,15 @@ Only generated state (never source) contains certificates and device tokens.
 """
 import argparse
 import base64
-import http.client
 import ipaddress
 import json
 import os
 from pathlib import Path
 import shutil
-import socket
-import ssl
 import sys
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -34,10 +30,11 @@ from sync_core import (  # noqa: E402
     is_lan_ip,
     sanitize,
 )
+from sync_server import ConnectionDeadline, make_bounded_server  # noqa: E402
 
-# Bound request-line/header parsing before route handling or authentication.
-http.client._MAXLINE = 8192
-http.client._MAXHEADERS = 32
+
+# Preserve the standalone entry's existing public factory name.
+make_server = make_bounded_server
 
 
 def lan_candidates():
@@ -74,204 +71,91 @@ def choose_host():
     return input("未找到已连接的局域网网卡，请连接 Wi-Fi 后输入电脑 IPv4：").strip()
 
 
-def _shutdown_socket(sock):
-    """Close a socket from the reaper; this unblocks the worker that holds it."""
-    try:
-        sock.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
-    try:
-        sock.close()
-    except OSError:
-        pass
+class RefreshWorker:
+    """Run quota refreshes without leaving PowerShell or its Codex child behind."""
 
-
-class ConnectionDeadline:
-    """Give every accepted connection an absolute lifetime.
-
-    settimeout() bounds one send/recv, not the connection, so a client that dribbles a
-    byte at a time can hold a worker slot forever. With all 16 slots held this server
-    closed every new connection before the TLS handshake and the phone only saw a
-    network error. The reaper closes anything past `limit`, freeing the slot.
-    Mirrors mobile-sync/desktop.py; keep the two in sync.
-    """
-
-    def __init__(self, limit):
-        self.limit = limit
-        self.lock = threading.Lock()
-        self.live = {}
+    def __init__(self, state, command=None, interval=60, timeout=50):
+        self.state = state
+        self.command = command or [
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(state / "read-usage.ps1"),
+        ]
+        self.interval = interval
+        self.timeout = timeout
         self.stop = threading.Event()
-        self.thread = threading.Thread(target=self._reap, daemon=True)
+        self.lock = threading.Lock()
+        self.process = None
+        self.thread = threading.Thread(target=self._run, name="sync-quota-refresh", daemon=True)
 
     def start(self):
         self.thread.start()
 
-    def add(self, sock):
-        with self.lock:
-            self.live[sock] = time.monotonic()
+    def _mark_stale(self):
+        try:
+            path = self.state / "usage.json"
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict):
+                data["status"] = "stale"
+                _replace(path, json.dumps(data).encode())
+        except (OSError, ValueError, TypeError):
+            pass
 
-    def discard(self, sock):
-        with self.lock:
-            self.live.pop(sock, None)
+    @staticmethod
+    def _terminate(process):
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                               timeout=5, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=False,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except (OSError, subprocess.SubprocessError):
+                process.kill()
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+    def _run(self):
+        while not self.stop.is_set():
+            failed = False
+            process = None
+            try:
+                process = subprocess.Popen(
+                    self.command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                with self.lock:
+                    self.process = process
+                try:
+                    if process.wait(timeout=self.timeout) != 0:
+                        failed = True
+                except subprocess.TimeoutExpired:
+                    failed = True
+                    self._terminate(process)
+            except OSError:
+                failed = True
+            finally:
+                with self.lock:
+                    if self.process is process:
+                        self.process = None
+            if failed and not self.stop.is_set():
+                self._mark_stale()
+            self.stop.wait(self.interval)
 
     def close(self):
         self.stop.set()
-        with self.lock:
-            socks = list(self.live)
-            self.live.clear()
-        for sock in socks:
-            _shutdown_socket(sock)
-
-    def _reap(self):
-        while not self.stop.wait(1.0):
-            now = time.monotonic()
+        deadline = time.monotonic() + 7
+        while self.thread.is_alive() and time.monotonic() < deadline:
             with self.lock:
-                expired = [sock for sock, accepted in self.live.items() if now - accepted > self.limit]
-                for sock in expired:
-                    self.live.pop(sock, None)
-            for sock in expired:
-                _shutdown_socket(sock)
-
-
-def make_server(bridge, host, port, cert, key, deadline_seconds=15):
-    class Handler(BaseHTTPRequestHandler):
-        def setup(self):
-            # Handshake in the worker thread, never in accept(); see Server.get_request.
-            self.connection = self.request
-            self.connection.settimeout(10)
-            self.connection.do_handshake()
-            super().setup()
-
-        def log_message(self, *args):
-            pass  # Never log headers, tokens, invitations, or quota values.
-
-        def reply(self, status, data):
-            raw = json.dumps(data, allow_nan=False).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-        def guard(self):
-            """Shared gate for every route: source rate limit, then the path check."""
-            if not self.server.limiter.allow(self.client_address[0]):
-                self.reply(429, {"error": "too_many_requests"}); return False
-            return True
-
-        def do_POST(self):
-            if not self.guard():
-                return
-            if self.path != "/pair":
-                self.reply(404, {"error": "not_found"}); return
-            token = bridge.pair(self.headers.get("Authorization", "").removeprefix("Bearer "), self.client_address[0])
-            self.reply(200 if token else 403, {"token": token} if token else {"error": "pairing_rejected"})
-
-        def do_GET(self):
-            if not self.guard():
-                return
-            if self.path != "/usage":
-                self.reply(404, {"error": "not_found"}); return
-            if not bridge.authorized(self.headers.get("Authorization", "").removeprefix("Bearer ")):
-                self.reply(401, {"error": "unauthorized"}); return
-            self.reply(200, bridge.usage())
-
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.minimum_version = ssl.TLSVersion.TLSv1_2
-    tls.load_cert_chain(cert, key)
-
-    class Server(ThreadingHTTPServer):
-        # The listener is *not* wrapped: wrapping it makes accept() perform the
-        # handshake on the accept loop, so one client that connects and never
-        # finishes the handshake wedges every other client. Accept in the clear,
-        # then hand the socket to a bounded worker which does the handshake under
-        # a timeout. This mirrors mobile-sync/desktop.py make_desktop_server;
-        # keep the two in sync if either is touched.
-        daemon_threads = True
-        allow_reuse_address = False  # On Windows SO_REUSEADDR lets another process steal the port.
-
-        def __init__(self):
-            self.slots = threading.BoundedSemaphore(16)
-            self.deadline = ConnectionDeadline(deadline_seconds)
-            self.limiter = SourceRateLimit(60)
-            self.peers = SourceConcurrencyLimit(4)
-            super().__init__((host, port), Handler)
-            self.deadline.start()
-
-        def verify_request(self, request, client_address):
-            # Enforce the "LAN only" promise in code instead of relying on the firewall
-            # rule alone: a source routable from outside must never reach a handler.
-            address = client_address[0]
-            if not (is_lan_ip(address) or address == "127.0.0.1"):
-                return False
-            return self.peers.acquire(request, address)
-
-        def get_request(self):
-            sock, address = self.socket.accept()
-            try:
-                wrapped = tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
-            except Exception:
-                sock.close()
-                raise
-            self.deadline.add(wrapped)
-            return wrapped, address
-
-        def shutdown_request(self, request):
-            self.deadline.discard(request)
-            self.peers.release(request)
-            super().shutdown_request(request)
-
-        def process_request(self, request, address):
-            if not self.slots.acquire(False):
-                # Nothing can be reported in HTTP before the handshake, so just drop it.
-                # The absolute deadline above is what stops this from lasting forever.
-                self.deadline.discard(request)
-                self.peers.release(request)
-                request.close()
-                return
-            try:
-                super().process_request(request, address)
-            except Exception:
-                self.slots.release()
-                raise
-
-        def process_request_thread(self, request, address):
-            try:
-                super().process_request_thread(request, address)
-            finally:
-                self.slots.release()
-
-        def handle_error(self, request, address):
-            pass
-
-        def server_close(self):
-            # Close tracked sockets first so workers blocked in a read can finish.
-            self.deadline.close()
-            super().server_close()
-
-    return Server()
-
-
-def refresh_loop(state, stop):
-    while not stop.is_set():
-        try:
-            subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(state / "read-usage.ps1")],
-                           timeout=50, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=True)
-        except (OSError, subprocess.SubprocessError):
-            try:
-                path = state / "usage.json"
-                data = json.loads(path.read_text(encoding="utf-8-sig"))
-                if isinstance(data, dict):
-                    data["status"] = "stale"
-                    _replace(path, json.dumps(data).encode())
-            except (OSError, ValueError, TypeError):
-                # A TypeError here (usage.json holding a list, say) used to escape this
-                # guard and end the refresh thread for good, after which the bridge kept
-                # serving frozen data forever.
-                pass
-        stop.wait(60)
+                process = self.process
+            if process is not None:
+                self._terminate(process)
+            self.thread.join(timeout=0.05)
 
 
 def main():
@@ -320,8 +204,7 @@ def main():
     else:
         print(f"手机无线地址：{args.host}:{args.port}。已配对同一同步端的手机可用“切换无线地址”，无需重新配对。")
         print("若手机连不上，请运行随附的 allow-wireless.ps1，仅放行本机此端口的局域网访问。")
-    stop = threading.Event()
-    worker = threading.Thread(target=refresh_loop, args=(state, stop), daemon=True)
+    worker = RefreshWorker(state)
     if not args.no_refresh:
         worker.start()
     try:
@@ -329,7 +212,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        stop.set(); server.server_close()
+        worker.close()
+        server.server_close()
         (state / "pairing.txt").unlink(missing_ok=True)
         (state / "pairing.png").unlink(missing_ok=True)
 

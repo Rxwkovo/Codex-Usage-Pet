@@ -5,18 +5,65 @@ import time
 import json
 import socket
 import ssl
+import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
 import bridge as standalone
 from bridge import (POLICY, Bridge, ConnectionDeadline, SourceConcurrencyLimit,
-                    SourceRateLimit, certificate, make_server, sanitize, is_lan_ip)
+                    SourceRateLimit, RefreshWorker, certificate, make_server,
+                    sanitize, is_lan_ip)
 from sync_core import Bridge as CoreBridge, sanitize as core_sanitize
+from sync_server import (ConnectionDeadline as CoreConnectionDeadline,
+                         make_bounded_server)
 
 class BridgeTests(unittest.TestCase):
     def test_standalone_entry_uses_the_root_core(self):
         self.assertIs(standalone.Bridge, CoreBridge)
         self.assertIs(standalone.sanitize, core_sanitize)
+        self.assertIs(ConnectionDeadline, CoreConnectionDeadline)
+        self.assertIs(make_server, make_bounded_server)
+
+    def test_server_close_releases_port_without_changing_existing_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            bridge = Bridge(state)
+            token = bridge.pair(bridge.invite, "127.0.0.1")
+            stored = (state / "devices.json").read_bytes()
+            cert, key, _ = certificate(state, "127.0.0.1")
+            server = make_server(bridge, "127.0.0.1", 0, cert, key)
+            port = server.server_port
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            server.shutdown(); server.server_close(); thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual((state / "devices.json").read_bytes(), stored)
+            self.assertTrue(Bridge(state).authorized(token))
+            probe = socket.socket()
+            try:
+                probe.bind(("127.0.0.1", port))
+            finally:
+                probe.close()
+
+    def test_refresh_worker_terminates_its_child_on_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worker = RefreshWorker(
+                Path(tmp),
+                command=[sys.executable, "-c", "import time; time.sleep(60)"],
+                interval=60,
+                timeout=60,
+            )
+            worker.start()
+            end = time.monotonic() + 5
+            process = None
+            while process is None and time.monotonic() < end:
+                with worker.lock:
+                    process = worker.process
+                time.sleep(0.02)
+            self.assertIsNotNone(process)
+            worker.close()
+            self.assertIsNotNone(process.poll())
+            self.assertFalse(worker.thread.is_alive())
 
     def test_lan_addresses_exclude_loopback_stale_link_local_and_public(self):
         for host in ("192.168.3.44", "10.0.0.1", "172.16.1.5"):

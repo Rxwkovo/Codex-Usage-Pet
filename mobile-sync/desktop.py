@@ -8,27 +8,23 @@ import base64
 import ctypes
 import hashlib
 import hmac
-import http.client
 import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
-import socket
-import ssl
 import subprocess
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import qrcode
-from protocol import Bridge, SourceConcurrencyLimit, SourceRateLimit, certificate, is_lan_ip, sanitize
+from protocol import Bridge, certificate, is_lan_ip, sanitize
+from sync_server import ConnectionDeadline, make_bounded_server
 
-# BaseHTTPRequestHandler otherwise accepts roughly 6 MiB of headers per connection.
-# Keep the tiny local API bounded before any route or authentication code runs.
-http.client._MAXLINE = 8192
-http.client._MAXHEADERS = 32
+
+# Preserve the entry-specific public name used by the launcher and older tests.
+make_desktop_server = make_bounded_server
 
 
 def atomic_json(path, data):
@@ -158,178 +154,6 @@ class DesktopBridge(Bridge):
                 'expires': int(self.expires) if self.invite else 0,
                 'invite': self.invite if self.invite and self.expires > now else None,
             }
-
-
-def _shutdown_socket(sock):
-    """Close a socket from the reaper; this unblocks the worker that holds it."""
-    try:
-        sock.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
-    try:
-        sock.close()
-    except OSError:
-        pass
-
-
-class ConnectionDeadline:
-    """Give every accepted connection an absolute lifetime.
-
-    socket.settimeout() bounds one send/recv, not the connection. A client that dribbles
-    a byte at a time resets it on every read, so it can hold a worker slot forever - and
-    with all 16 slots held the server closed every new connection before the TLS
-    handshake, so the phone only ever saw a network error. The reaper closes anything
-    that outlives `limit`, which makes the blocked read fail and frees the slot.
-    """
-
-    def __init__(self, limit):
-        self.limit = limit
-        self.lock = threading.Lock()
-        self.live = {}
-        self.stop = threading.Event()
-        self.thread = threading.Thread(target=self._reap, daemon=True)
-
-    def start(self):
-        self.thread.start()
-
-    def add(self, sock):
-        with self.lock:
-            self.live[sock] = time.monotonic()
-
-    def discard(self, sock):
-        with self.lock:
-            self.live.pop(sock, None)
-
-    def close(self):
-        self.stop.set()
-        with self.lock:
-            socks = list(self.live)
-            self.live.clear()
-        for sock in socks:
-            _shutdown_socket(sock)
-
-    def _reap(self):
-        while not self.stop.wait(1.0):
-            now = time.monotonic()
-            with self.lock:
-                expired = [sock for sock, accepted in self.live.items() if now - accepted > self.limit]
-                for sock in expired:
-                    self.live.pop(sock, None)
-            for sock in expired:
-                _shutdown_socket(sock)
-
-
-def make_desktop_server(bridge, host, port, cert, key, deadline_seconds=15):
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.minimum_version = ssl.TLSVersion.TLSv1_2
-    tls.load_cert_chain(cert, key)
-
-    class Handler(BaseHTTPRequestHandler):
-        def setup(self):
-            self.connection = self.request
-            self.connection.settimeout(5)
-            self.connection.do_handshake()
-            super().setup()
-
-        def log_message(self, *args):
-            pass
-
-        def reply(self, status, value):
-            raw = json.dumps(value, allow_nan=False).encode()
-            self.send_response(status)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Content-Length', str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-        def guard(self):
-            """Shared gate for every route: source rate limit, then the path check."""
-            if not self.server.limiter.allow(self.client_address[0]):
-                self.reply(429, {'error': 'too_many_requests'}); return False
-            return True
-
-        def do_POST(self):
-            if not self.guard():
-                return
-            if self.path != '/pair':
-                self.reply(404, {'error': 'not_found'}); return
-            token = bridge.pair(self.headers.get('Authorization', '').removeprefix('Bearer '), self.client_address[0])
-            self.reply(200 if token else 403, {'token': token} if token else {'error': 'pairing_rejected'})
-
-        def do_GET(self):
-            if not self.guard():
-                return
-            if self.path != '/usage':
-                self.reply(404, {'error': 'not_found'}); return
-            data = bridge.authenticated_usage(self.headers.get('Authorization', '').removeprefix('Bearer '))
-            self.reply(401 if data is None else 200, {'error': 'unauthorized'} if data is None else data)
-
-    class Server(ThreadingHTTPServer):
-        daemon_threads = True
-        allow_reuse_address = False
-
-        def __init__(self):
-            self.slots = threading.BoundedSemaphore(16)
-            self.deadline = ConnectionDeadline(deadline_seconds)
-            self.limiter = SourceRateLimit(60)
-            self.peers = SourceConcurrencyLimit(4)
-            super().__init__((host, port), Handler)
-            self.deadline.start()
-
-        def verify_request(self, request, client_address):
-            # Enforce the "LAN only" promise in code instead of relying on the firewall
-            # rule alone: a source routable from outside must never reach a handler.
-            address = client_address[0]
-            if not (is_lan_ip(address) or address == '127.0.0.1'):
-                return False
-            return self.peers.acquire(request, address)
-
-        def get_request(self):
-            sock, address = self.socket.accept()
-            try:
-                # Handshake happens in the bounded worker, never the accept loop.
-                wrapped = tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
-            except Exception:
-                sock.close()
-                raise
-            self.deadline.add(wrapped)
-            return wrapped, address
-
-        def shutdown_request(self, request):
-            self.deadline.discard(request)
-            self.peers.release(request)
-            super().shutdown_request(request)
-
-        def process_request(self, request, address):
-            if not self.slots.acquire(False):
-                # Nothing can be reported in HTTP before the handshake, so just drop it.
-                # The absolute deadline above is what stops this from lasting forever.
-                self.deadline.discard(request)
-                self.peers.release(request)
-                request.close()
-                return
-            try:
-                super().process_request(request, address)
-            except Exception:
-                self.slots.release()
-                raise
-
-        def process_request_thread(self, request, address):
-            try:
-                super().process_request_thread(request, address)
-            finally:
-                self.slots.release()
-
-        def handle_error(self, request, address):
-            pass
-
-        def server_close(self):
-            # Close tracked sockets first so workers blocked in a read can finish.
-            self.deadline.close()
-            super().server_close()
-
-    return Server()
 
 
 def main():

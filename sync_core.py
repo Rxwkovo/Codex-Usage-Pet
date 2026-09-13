@@ -282,6 +282,18 @@ class Bridge:
         with self.lock:
             return any(hmac.compare_digest(digest, saved) for saved in self.tokens)
 
+    def authenticated_usage(self, token):
+        """Return a snapshot only while the token remains paired."""
+        if not isinstance(token, str) or len(token) > 128:
+            return None
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        with self.lock:
+            if not any(hmac.compare_digest(digest, saved) for saved in self.tokens):
+                return None
+            # Holding the pairing lock prevents a successful response from racing
+            # with revoke(). Entry-specific Bridge subclasses may also record use.
+            return self.usage()
+
     def usage(self):
         try:
             return sanitize(json.loads((self.state / "usage.json").read_text(encoding="utf-8-sig")))
