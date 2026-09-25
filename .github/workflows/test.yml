@@ -15,6 +15,7 @@ jobs:
         run: |
           ./tests/usage.tests.ps1
           ./tests/read-usage.tests.ps1
+          ./tests/persistent-usage.tests.ps1
       - name: Verify idle poses and walking boundaries
         shell: powershell
         run: ./tests/behavior.tests.ps1

@@ -47,7 +47,7 @@ v2.2.2 解压到 `%LOCALAPPDATA%\CodexUsagePet\2.2.2`，首次运行优先迁移
 
 默认取两档剩余额度的较小值：≥50% 开心；>20% 平静；>0% 担忧；0% 难过。这是宠物的表现规则，可在设置中调整。缺失、过期或同步失败的数据使用中性表情，缓存不冒充实时额度；连续三次失败会显示气泡和失败次数，成功后自动恢复。到达重置时间后等待在线同步。
 
-默认每 60 秒后台读取一次，可手动刷新。先尝试不使用 HTTP/HTTPS/ALL_PROXY 的直连（12 秒超时），失败后用原有网络配置重试（25 秒超时）。这不会切换系统 VPN，也不能保证在受限网络中绕过连接阻断。
+默认每 60 秒后台读取一次，可手动刷新。桌面端保留一个隐藏的读取进程与 App Server 会话，重复刷新复用连接；重叠刷新会合并。连接失败时先尝试不使用 HTTP/HTTPS/ALL_PROXY 的直连（12 秒总时限），再用原有网络配置重试（25 秒总时限）。这不会切换系统 VPN，也不能保证在受限网络中绕过连接阻断。
 
 不读取聊天内容、不直接读取密钥、不调用模型、不使用额度重置券。仅将两档百分比、重置时间、同步时间与路线保存在 `usage.json`。缓存与个人设置均被 `.gitignore` 排除。
 
@@ -59,6 +59,8 @@ python -m unittest discover -s mobile-sync -v
 python -m unittest discover -s bridge -v
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\usage.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\read-usage.tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\persistent-usage.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\mood.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\behavior.tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\preferences.tests.ps1
@@ -70,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\pet.ps1 -Smoke
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-上面 9 个 PowerShell 套件与两个 Python 套件就是 CI 的主要功能检查项；同步测试还覆盖读取失败保留、限流容量、单来源并发、请求大小和配对输入边界。`source.tests.ps1` 守住两件事：含中文的 `.ps1` 必须存为 UTF-8 BOM（否则 Windows PowerShell 5.1 会按 ANSI 解码而报语法错），以及 Android 成品帧尺寸必须与 `sprite-player.cs` 的内部渲染尺寸一致。
+上面 10 个 PowerShell 套件与两个 Python 套件就是主要功能检查项；同步测试还覆盖读取失败保留、限流容量、单来源并发、请求大小和配对输入边界。`source.tests.ps1` 守住两件事：含中文的 `.ps1` 必须存为 UTF-8 BOM（否则 Windows PowerShell 5.1 会按 ANSI 解码而报语法错），以及 Android 成品帧尺寸必须与 `sprite-player.cs` 的内部渲染尺寸一致。
 
 Android 预览版在 `android/`：`./build-windows.ps1` 会打包 APK、跑单元测试与 Lint（Windows 中文路径必须用它）。`android/export-frames.ps1` 从桌面版素材导出 520 张成品帧，**导出前必须先同步桌面版 `sprite-player.cs` 与 `assets/flat`**，否则会用旧图稿覆盖成品帧。
 

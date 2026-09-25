@@ -11,7 +11,9 @@ try {
  Copy-Item -LiteralPath (Join-Path $root 'usage-core.ps1') -Destination $sandbox
  $worker=Join-Path $sandbox 'read-usage.ps1'
  $output=Join-Path $sandbox 'usage.json'
- $tempFile="$output.tmp"
+ function Assert-NoTempFiles {
+  Assert (@(Get-ChildItem -LiteralPath $sandbox -Filter 'usage.json.*.tmp').Count -eq 0) 'The temporary file must not survive the atomic publish'
+ }
  $launcher=Join-Path $sandbox 'run-without-codex.ps1'
  # Hide the Codex CLI for the child process: it is found either on PATH or under
  # %LOCALAPPDATA%\OpenAI\Codex\bin, so both are redirected at a sandbox. -DirectOnly
@@ -36,7 +38,7 @@ try {
 
  # 1. No previous reading: the failure itself must be recorded, not thrown.
  Assert ((Invoke-Worker) -eq 0) 'A failed refresh must still exit 0 so the pet keeps refreshing'
- Assert (-not (Test-Path -LiteralPath $tempFile)) 'The temporary file must not survive the atomic publish'
+ Assert-NoTempFiles
  $first=Read-UsageFile
  foreach ($key in @('protocolVersion','policy','status','updatedAt','fiveHour','weekly')) {
   Assert ($null -ne $first.PSObject.Properties[$key]) ('usage.json must always carry '+$key)
@@ -50,7 +52,7 @@ try {
  #    the pet shows the last known numbers until they are refreshed successfully.
  [IO.File]::WriteAllText($output,'{"status":"ok","updatedAt":1234,"fiveHour":{"remaining":42,"resetsAt":5000},"weekly":{"remaining":77,"resetsAt":9000}}',(New-Object Text.UTF8Encoding($false)))
  Assert ((Invoke-Worker) -eq 0) 'A failed refresh over a cached reading must still exit 0'
- Assert (-not (Test-Path -LiteralPath $tempFile)) 'The temporary file must not survive a cached refresh'
+ Assert-NoTempFiles
  $cached=Read-UsageFile
  Assert ($cached.status -eq 'stale') 'A cached reading must be downgraded to stale, not deleted'
  Assert ($cached.fiveHour.remaining -eq 42 -and $cached.weekly.remaining -eq 77) 'The last known numbers must survive a failed refresh'
@@ -68,7 +70,7 @@ try {
  Assert ($recovered.status -eq 'unavailable') 'A corrupt cached reading must fall back to unavailable'
  Assert ($null -eq $recovered.fiveHour) 'A corrupt cached reading must not be half-parsed'
  Assert ($recovered.failureCount -eq 1) 'A corrupt cache starts a fresh failure count'
- Assert (-not (Test-Path -LiteralPath $tempFile)) 'The temporary file must not survive a corrupt publish'
+ Assert-NoTempFiles
  'PASS: read-usage failure paths, cached reading preservation, atomic publish'
 } finally {
  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }

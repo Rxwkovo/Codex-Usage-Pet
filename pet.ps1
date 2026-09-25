@@ -70,29 +70,89 @@ function Set-UsageMood($mood) {
 }
 $script:worker = $null
 $script:workerStarted = [DateTime]::MinValue
+$script:workerReadTask = $null
+$script:workerPending = $false
+$script:workerQueued = $false
+$script:workerPolicyArgs = ''
 $script:nextRefresh = [DateTime]::MinValue
 $script:usageStamp = ''
 $script:lastFailureAlert = 0
+function Stop-UsageWorker {
+ if ($null -eq $script:worker) { return }
+ try {
+  if (-not $script:worker.HasExited) {
+   try { $script:worker.StandardInput.WriteLine('stop') } catch { }
+   # A wedged worker cannot run its finally block. Kill its whole process tree
+   # so that its owned app-server child does not survive the desktop pet.
+   $reaper=Start-Process -FilePath (Join-Path $env:WINDIR 'System32/taskkill.exe') -ArgumentList @('/PID',[string]$script:worker.Id,'/T','/F') -WindowStyle Hidden -PassThru
+   # Do not wait for taskkill on the WPF dispatcher.
+   $reaper.Dispose()
+  }
+ } catch {
+  try { if (-not $script:worker.HasExited) { $script:worker.Kill() } } catch { }
+ }
+ try { $script:worker.Dispose() } catch { }
+ $script:worker=$null; $script:workerReadTask=$null; $script:workerPending=$false; $script:workerQueued=$false
+}
+function Start-UsageWorker([string]$policyArgs) {
+ $workerPath = Join-Path $PSScriptRoot 'read-usage.ps1'
+ $info=New-Object Diagnostics.ProcessStartInfo
+ $info.FileName='powershell.exe'
+ $info.Arguments='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$workerPath+'" -Persistent'+$policyArgs
+ $info.UseShellExecute=$false; $info.CreateNoWindow=$true
+ $info.RedirectStandardInput=$true; $info.RedirectStandardOutput=$true
+ $script:worker=New-Object Diagnostics.Process
+ $script:worker.StartInfo=$info
+ try {
+  [void]$script:worker.Start()
+  $script:workerPolicyArgs=$policyArgs
+ } catch {
+  try { $script:worker.Dispose() } catch { }
+  $script:worker=$null
+  throw
+ }
+}
 function Refresh-Usage {
  if ($Preview -or $Smoke) { return }
- if ($null -ne $script:worker) {
-  if (-not $script:worker.HasExited) {
-   # read-usage.ps1 has its own timeouts (12s direct / 25s proxied), but the guard
-   # below used to be the only exit: a wedged worker left HasExited false forever,
-   # so quota refresh stopped for the rest of the session. Reap it after the
-   # longest internal timeout plus a generous margin.
-   if (-not (Test-UsageWorkerStale $script:workerStarted ([DateTime]::Now))) { return }
-   try { $script:worker.Kill(); $script:worker.WaitForExit(2000) | Out-Null } catch { }
-  }
-  try { $script:worker.Dispose() } catch { }
-  $script:worker = $null
- }
- $workerPath = Join-Path $PSScriptRoot 'read-usage.ps1'
  $invariant=[Globalization.CultureInfo]::InvariantCulture
  $policyArgs=' -RefreshSeconds '+[Convert]::ToString($script:usagePolicy.refreshSeconds,$invariant)+' -StaleSeconds '+[Convert]::ToString($script:usagePolicy.staleSeconds,$invariant)+' -HappyThreshold '+[Convert]::ToString($script:usagePolicy.happyMinRemaining,$invariant)+' -WorriedThreshold '+[Convert]::ToString($script:usagePolicy.worriedMaxRemaining,$invariant)
- $script:worker = Start-Process powershell.exe -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$workerPath+'"'+$policyArgs) -WindowStyle Hidden -PassThru
- $script:workerStarted = [DateTime]::Now
- $script:nextRefresh = [DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
+ if ($null -ne $script:worker -and ($script:worker.HasExited -or $script:workerPolicyArgs -ne $policyArgs)) { Stop-UsageWorker }
+ if ($script:workerPending) {
+  $script:workerQueued=$true
+  $script:nextRefresh=[DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
+  return
+ }
+ if ($null -eq $script:worker) { Start-UsageWorker $policyArgs }
+ try {
+  $script:workerReadTask=$script:worker.StandardOutput.ReadLineAsync()
+  $script:worker.StandardInput.WriteLine('refresh')
+  $script:workerPending=$true
+  $script:workerStarted=[DateTime]::Now
+  $script:nextRefresh=[DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
+ } catch {
+  Stop-UsageWorker
+  $script:nextRefresh=[DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
+ }
+}
+function Update-UsageWorker {
+ if (-not $script:workerPending) { return }
+ if ($script:worker.HasExited -or (Test-UsageWorkerStale $script:workerStarted ([DateTime]::Now))) {
+  Stop-UsageWorker
+  $script:nextRefresh=[DateTime]::MinValue
+  return
+ }
+ if (-not $script:workerReadTask.IsCompleted) { return }
+ try { $reply=$script:workerReadTask.Result } catch { $reply=$null }
+ $script:workerReadTask=$null; $script:workerPending=$false
+ if ($reply -notin @('done','failed')) {
+  Stop-UsageWorker
+  $script:nextRefresh=[DateTime]::MinValue
+  return
+ }
+ if ($script:workerQueued) {
+  $script:workerQueued=$false
+  Refresh-Usage
+ }
 }
 function Show-Usage {
  $path = Join-Path $PSScriptRoot 'usage.json'
@@ -384,6 +444,7 @@ $timer.Add_Tick({
  }
  if (($script:clock.Elapsed.TotalSeconds-$script:lastUsageCheck) -ge 1 -and -not $Smoke) {
   $script:lastUsageCheck=$script:clock.Elapsed.TotalSeconds
+  Update-UsageWorker
   if ([DateTime]::Now -ge $script:nextRefresh) { Refresh-Usage }
   Show-Usage
  }
@@ -434,7 +495,7 @@ function Initialize-PetTray {
  $script:tray.Add_MouseDoubleClick({if($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){Show-PetFromTray}})
  $script:tray.Visible=$true
 }
-$window.Add_Closed({ $timer.Stop(); Stop-MobileLink; Remove-PetTray; if (-not $Preview -and -not $Smoke) { Save-State } })
+$window.Add_Closed({ $timer.Stop(); Stop-UsageWorker; Stop-MobileLink; Remove-PetTray; if (-not $Preview -and -not $Smoke) { Save-State } })
 if ($Preview) {
  Resize-Pet 0.8
  Resize-Pet 1.3
@@ -477,7 +538,7 @@ if ($Preview) {
  if(-not $Smoke -and $script:mobileConfig.autoStart){try{Start-MobileLink}catch{$script:mobileMessage=$_.Exception.Message}}
  $timer.Start()
  Say '你好，我是码团。点我摸摸，右键打开菜单。'
- try {Initialize-PetTray; [void]$window.ShowDialog()} finally {$timer.Stop(); Stop-MobileLink; Remove-PetTray}
+ try {Initialize-PetTray; [void]$window.ShowDialog()} finally {$timer.Stop(); Stop-UsageWorker; Stop-MobileLink; Remove-PetTray}
  if ($Smoke) {
   if ($null -eq $script:smokeDistance -or $script:smokeDistance -lt 8) {throw 'Live walking did not move the desktop window'}
   if($null -ne $script:tray){throw 'Tray icon was not disposed on exit'}
