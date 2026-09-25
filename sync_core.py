@@ -257,6 +257,54 @@ class SourceConcurrencyLimit:
                 self.counts.pop(address, None)
 
 
+class DeviceStoreLock:
+    """Cross-process exclusive lock for the shared device-token file."""
+
+    def __init__(self, path, timeout=5):
+        self.path = path
+        self.timeout = timeout
+        self.stream = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = open(self.path, "a+b")
+        if self.stream.seek(0, os.SEEK_END) == 0:
+            self.stream.write(b"\0")
+            self.stream.flush()
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                self.stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(self.stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (OSError, BlockingIOError):
+                if time.monotonic() >= deadline:
+                    self.stream.close()
+                    self.stream = None
+                    raise TimeoutError("device store is busy")
+                time.sleep(0.02)
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.stream is None:
+            return
+        try:
+            self.stream.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.stream.close()
+            self.stream = None
+
+
 class Bridge:
     """One-use invitation codes and hashed device tokens.
 
@@ -269,6 +317,7 @@ class Bridge:
         self.expires = time.time() + 600
         self.lock = threading.Lock()
         self.tokens_file = state / "devices.json"
+        self.tokens_lock = state / "devices.lock"
         self.policy = normalize_policy(policy)
         self.tokens = self._read_tokens()
         self.attempts = {}
@@ -299,23 +348,34 @@ class Bridge:
             if count >= 10 or not self.invite or time.time() > self.expires or not hmac.compare_digest(code, self.invite):
                 return None
             token = secrets.token_urlsafe(32)
-            # Re-read from disk first: the desktop service and the standalone bridge
-            # can share this directory, and an in-memory list from start-up would
-            # silently drop a device that the other process paired.
-            self.tokens = self._read_tokens()
-            self.tokens.append(hashlib.sha256(token.encode()).hexdigest())
-            self.tokens = self.tokens[-10:]
-            _replace(self.tokens_file, json.dumps(self.tokens).encode())
+            with DeviceStoreLock(self.tokens_lock):
+                self.tokens = self._read_tokens()
+                self.tokens.append(hashlib.sha256(token.encode()).hexdigest())
+                self.tokens = self.tokens[-10:]
+                _replace(self.tokens_file, json.dumps(self.tokens).encode())
             self.invite = None
             return token
 
     def revoke(self):
         """Atomically revoke every device token and the current invitation."""
         with self.lock:
-            _replace(self.tokens_file, b"[]")
-            self.tokens = []
+            with DeviceStoreLock(self.tokens_lock):
+                _replace(self.tokens_file, b"[]")
+                self.tokens = []
             self.invite = None
             self.expires = 0
+
+    def renew_invite(self, minutes=10):
+        with self.lock:
+            self.invite = secrets.token_urlsafe(32)
+            self.expires = time.time() + minutes * 60
+            self.attempts.clear()
+
+    def token_hashes(self):
+        with self.lock:
+            with DeviceStoreLock(self.tokens_lock):
+                self.tokens = self._read_tokens()
+                return list(self.tokens)
 
     def authorized(self, token):
         # A device token is 32 random bytes; anything longer was never issued by us.
@@ -323,7 +383,9 @@ class Bridge:
             return False
         digest = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:
-            return any(hmac.compare_digest(digest, saved) for saved in self.tokens)
+            with DeviceStoreLock(self.tokens_lock):
+                self.tokens = self._read_tokens()
+                return any(hmac.compare_digest(digest, saved) for saved in self.tokens)
 
     def authenticated_usage(self, token):
         """Return a snapshot only while the token remains paired."""
@@ -331,11 +393,17 @@ class Bridge:
             return None
         digest = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:
-            if not any(hmac.compare_digest(digest, saved) for saved in self.tokens):
-                return None
-            # Holding the pairing lock prevents a successful response from racing
-            # with revoke(). Entry-specific Bridge subclasses may also record use.
-            return self.usage()
+            with DeviceStoreLock(self.tokens_lock):
+                self.tokens = self._read_tokens()
+                if not any(hmac.compare_digest(digest, saved) for saved in self.tokens):
+                    return None
+                self._record_authorized(digest)
+                # Keep the store lock through snapshot creation: once revoke()
+                # returns in either process, no stale instance can authorize again.
+                return self.usage()
+
+    def _record_authorized(self, digest):
+        pass
 
     def usage(self):
         try:

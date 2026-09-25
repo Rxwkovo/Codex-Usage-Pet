@@ -71,6 +71,38 @@ class SharedCoreTests(unittest.TestCase):
         self.assertNotIn('privateKey', published)
         self.assertNotIn('PRIVATE_KEY_MATERIAL', published)
 
+    def test_two_entries_share_revocation_and_never_revive_old_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            source = state/'desktop-usage.json'
+            atomic_json(source, quota())
+            desktop = DesktopBridge(state, source, 10)
+            standalone = CoreBridge(state)
+            old = desktop.pair(desktop.invite, '192.168.1.9')
+            self.assertTrue(standalone.authorized(old))
+            desktop.revoke()
+            self.assertFalse(standalone.authorized(old))
+            fresh = standalone.pair(standalone.invite, '192.168.1.10')
+            self.assertIsNotNone(desktop.authenticated_usage(fresh))
+            self.assertFalse(desktop.authorized(old))
+            standalone.revoke()
+            self.assertIsNone(desktop.authenticated_usage(fresh))
+
+    def test_concurrent_pairing_keeps_both_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            first, second = CoreBridge(state), CoreBridge(state)
+            results = []
+            threads = [
+                threading.Thread(target=lambda b=first: results.append(b.pair(b.invite, '192.168.1.11'))),
+                threading.Thread(target=lambda b=second: results.append(b.pair(b.invite, '192.168.1.12'))),
+            ]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            restored = CoreBridge(state)
+            self.assertEqual(len([token for token in results if token]), 2)
+            self.assertTrue(all(restored.authorized(token) for token in results))
+
 
 class DesktopProtocolTests(unittest.TestCase):
     def setUp(self):

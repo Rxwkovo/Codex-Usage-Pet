@@ -6,8 +6,6 @@ current-user-only directory, and all network responses use a quota whitelist.
 import argparse
 import base64
 import ctypes
-import hashlib
-import hmac
 import ipaddress
 import json
 import os
@@ -128,28 +126,21 @@ class DesktopBridge(Bridge):
             data = {}
         return sanitize(data, policy=self.policy)
 
-    def authenticated_usage(self, token):
-        if len(token) > 128:
-            return None
-        digest = hashlib.sha256(token.encode()).hexdigest()
-        with self.lock:
-            if not any(hmac.compare_digest(digest, saved) for saved in self.tokens):
-                return None
-            self.last_seen[digest] = time.time()
-            # Revocation cannot race with an authorized snapshot being created.
-            return self.usage()
+    def _record_authorized(self, digest):
+        self.last_seen[digest] = time.time()
 
     def snapshot(self):
         now = time.time()
+        tokens = self.token_hashes()
         with self.lock:
             # Forget devices that are no longer paired. Their entries kept this map
             # growing, and 'lastSeen' could report a phone the user had replaced while
             # 'online' only counted the current tokens, so the two disagreed.
-            live = set(self.tokens)
+            live = set(tokens)
             self.last_seen = {k: v for k, v in self.last_seen.items() if k in live}
             return {
-                'paired': len(self.tokens),
-                'online': sum(now-self.last_seen.get(t, 0) < 120 for t in self.tokens),
+                'paired': len(tokens),
+                'online': sum(now-self.last_seen.get(t, 0) < 120 for t in tokens),
                 'lastSeen': int(max(self.last_seen.values(), default=0)),
                 'expires': int(self.expires) if self.invite else 0,
                 'invite': self.invite if self.invite and self.expires > now else None,

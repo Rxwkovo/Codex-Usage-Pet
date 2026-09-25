@@ -177,13 +177,14 @@ def main():
     if os.name == "nt":
         identity = subprocess.check_output(["whoami"], text=True).strip()
         subprocess.run(["icacls", str(state), "/inheritance:r", "/grant:r", f"{identity}:(OI)(CI)F"], check=True, stdout=subprocess.DEVNULL)
-    if args.reset:
-        (state / "devices.json").unlink(missing_ok=True)
     root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
     for filename in ("read-usage.ps1", "usage-core.ps1"):
         shutil.copy2(root / filename, state / filename)
     cert, key, pin = certificate(state, args.host)
     bridge = Bridge(state)
+    if args.reset:
+        bridge.revoke()
+        bridge.renew_invite()
     try:
         server = make_server(bridge, args.host, args.port, cert, key)
     except OSError as error:
