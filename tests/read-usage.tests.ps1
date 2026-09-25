@@ -21,7 +21,7 @@ try {
   '$env:PATH=''C:\Windows\System32'''
   ('$env:LOCALAPPDATA='''+$fakeProfile+'''')
   '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null'
-  ('& '''+$worker+''' -DirectOnly')
+  ('& '''+$worker+''' -DirectOnly -RefreshSeconds 300 -StaleSeconds 360 -HappyThreshold 80 -WorriedThreshold 20')
  )
  [IO.File]::WriteAllLines($launcher,$launcherLines,(New-Object Text.UTF8Encoding($false)))
  function Invoke-Worker {
@@ -38,10 +38,11 @@ try {
  Assert ((Invoke-Worker) -eq 0) 'A failed refresh must still exit 0 so the pet keeps refreshing'
  Assert (-not (Test-Path -LiteralPath $tempFile)) 'The temporary file must not survive the atomic publish'
  $first=Read-UsageFile
- foreach ($key in @('status','updatedAt','fiveHour','weekly')) {
+ foreach ($key in @('protocolVersion','policy','status','updatedAt','fiveHour','weekly')) {
   Assert ($null -ne $first.PSObject.Properties[$key]) ('usage.json must always carry '+$key)
  }
  Assert ($first.status -eq 'unavailable') 'An unreadable quota must be reported as unavailable'
+ Assert ($first.protocolVersion -eq 2 -and $first.policy.refreshSeconds -eq 300 -and $first.policy.staleSeconds -eq 360) 'An unavailable quota publishes the validated desktop timing policy'
  Assert ($null -eq $first.fiveHour -and $null -eq $first.weekly) 'An unavailable quota must not invent numbers'
  Assert ($first.failureCount -eq 1) 'The first failed refresh must start the consecutive failure count'
 
@@ -54,6 +55,7 @@ try {
  Assert ($cached.status -eq 'stale') 'A cached reading must be downgraded to stale, not deleted'
  Assert ($cached.fiveHour.remaining -eq 42 -and $cached.weekly.remaining -eq 77) 'The last known numbers must survive a failed refresh'
  Assert ($cached.updatedAt -eq 1234) 'The timestamp of the cached reading must be preserved'
+ Assert ($cached.protocolVersion -eq 2 -and $cached.policy.happyMinRemaining -eq 80 -and $cached.policy.worriedMaxRemaining -eq 20) 'A legacy cached reading must use the validated desktop mood policy'
  Assert ($cached.failureCount -eq 1) 'A good cached reading with no prior failure starts at one failure'
  Assert ((Invoke-Worker) -eq 0) 'A repeated failed refresh must still exit 0'
  $repeated=Read-UsageFile

@@ -79,7 +79,7 @@ class PetStore(private val context: Context) {
             }catch(e:Exception){main.post{inFlight=false;if(ticket==generation){message=connectionError(e)+"；原连接已保留";done(message);changed()}}}
         }
     }
-    private val ticker=object:Runnable { override fun run() { if(clients>0){ refresh(); main.postDelayed(this,60000) } } }
+    private val ticker=object:Runnable { override fun run() { if(clients>0){ refresh(); main.postDelayed(this,((usage?.policy?.refreshSeconds ?: UsagePolicy.DEFAULT_REFRESH_SECONDS)*1000).toLong()) } } }
     fun acquire(){ if(clients++==0) main.post(ticker) }
     fun release(){clients=(clients-1).coerceAtLeast(0);if(clients==0)main.removeCallbacks(ticker)}
     fun changed(){listeners.toList().forEach{it()}}
@@ -170,6 +170,25 @@ class PetStore(private val context: Context) {
         }} finally{conn.disconnect()}
     }
     companion object {
-        fun decode(raw:String?,receivedAt:Long=System.currentTimeMillis()/1000):Usage?=try {val j=JSONObject(raw?:"");fun window(k:String):WindowQuota?{val w=j.optJSONObject(k)?:return null;return WindowQuota(w.getDouble("remaining"),w.optLong("resetsAt",0))};val updatedAt=j.getLong("updatedAt");Usage(window("fiveHour"),window("weekly"),updatedAt,j.getString("status"),j.optLong("serverTime",updatedAt),receivedAt)}catch(e:Exception){null}
+        fun decode(raw:String?,receivedAt:Long=System.currentTimeMillis()/1000):Usage?=try {
+            val j=JSONObject(raw?:"")
+            fun number(value:Any?):Double?=(value as? Number)?.toDouble()?.takeIf{it.isFinite()}
+            fun integer(value:Any?):Long? { val number=number(value)?:return null; if(number!=kotlin.math.floor(number) || number < Long.MIN_VALUE.toDouble() || number > Long.MAX_VALUE.toDouble())return null; return number.toLong() }
+            fun window(k:String):WindowQuota? { val w=j.optJSONObject(k)?:return null; val remaining=number(w.opt("remaining"))?:return null; val resetsAt=integer(w.opt("resetsAt"))?:return null; return WindowQuota(remaining,resetsAt) }
+            val version=integer(j.opt("protocolVersion")) ?: 1L
+            val policyObject=j.optJSONObject("policy")
+            val declared=if(version>=2 && policyObject!=null)UsagePolicy(
+                number(policyObject.opt("refreshSeconds")) ?: Double.NaN,
+                number(policyObject.opt("staleSeconds")) ?: Double.NaN,
+                number(policyObject.opt("clockSkewToleranceSeconds")) ?: Double.NaN,
+                number(policyObject.opt("happyMinRemaining")) ?: Double.NaN,
+                number(policyObject.opt("worriedMaxRemaining")) ?: Double.NaN,
+                number(policyObject.opt("exhaustedMaxRemaining")) ?: Double.NaN
+            ) else null
+            val updatedAt=integer(j.opt("updatedAt")) ?: return null
+            val serverTime=if(j.has("serverTime"))integer(j.opt("serverTime")) ?: return null else updatedAt
+            val status=j.opt("status") as? String ?: return null
+            Usage(window("fiveHour"),window("weekly"),updatedAt,status,serverTime,receivedAt,UsagePolicy.fromDeclared(version,declared))
+        }catch(e:Exception){null}
     }
 }

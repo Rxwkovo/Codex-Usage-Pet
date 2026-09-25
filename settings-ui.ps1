@@ -63,8 +63,16 @@
   if($errorText){[void][Windows.MessageBox]::Show($dialog,$errorText,'请检查设置');return}
   foreach($s in (Get-PreferenceSchema)){if($s.type -eq 'number'){$candidate[$s.key]=[double]$candidate[$s.key]}}
   try {
+   $newUsagePolicy=Get-UsagePolicy $candidate
+   $policyChanged=$false
+   foreach($key in @('refreshSeconds','staleSeconds','clockSkewToleranceSeconds','happyMinRemaining','worriedMaxRemaining','exhaustedMaxRemaining')) {
+    if([double]$script:usagePolicy[$key] -ne [double]$newUsagePolicy[$key]){$policyChanged=$true;break}
+   }
+   $restartMobile=$policyChanged -and $null -ne $script:mobileProcess -and -not $script:mobileProcess.HasExited
    $candidate | ConvertTo-Json | Set-Content -LiteralPath $script:preferencesPath -Encoding UTF8
-   $script:preferences=$candidate; Apply-Preferences; Save-State; $dialog.Close()
+   $script:preferences=$candidate; $script:usagePolicy=$newUsagePolicy; Apply-Preferences; Save-State
+   if($restartMobile){Start-MobileLink}
+   $dialog.Close()
   } catch {[void][Windows.MessageBox]::Show($dialog,('设置保存失败：'+$_.Exception.Message),'码团')}
  })
  if($PreviewSettings) {

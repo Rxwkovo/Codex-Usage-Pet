@@ -1,4 +1,59 @@
-function Convert-Usage($response) {
+function Get-PolicyValue($Source,[string[]]$Names,$Default) {
+ if($null -eq $Source){return $Default}
+ foreach($name in $Names) {
+  if($Source -is [Collections.IDictionary] -and $Source.Contains($name)){return $Source[$name]}
+  $property=$Source.PSObject.Properties[$name]
+  if($null -ne $property){return $property.Value}
+ }
+ return $Default
+}
+function ConvertTo-PolicyNumber($Value,[string]$Name) {
+ if($Value -is [bool] -or $Value -is [string]){throw "$Name must be a finite number"}
+ $number=0.0
+ $text=[Convert]::ToString($Value,[Globalization.CultureInfo]::InvariantCulture)
+ if(-not [double]::TryParse($text,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or [double]::IsNaN($number) -or [double]::IsInfinity($number)){throw "$Name must be a finite number"}
+ return $number
+}
+function Get-UsagePolicy($Preferences=$null) {
+ $policy=@{
+  refreshSeconds=60
+  staleSeconds=120
+  clockSkewToleranceSeconds=5
+  happyMinRemaining=50
+  worriedMaxRemaining=20
+  exhaustedMaxRemaining=0
+ }
+ if($null -ne $Preferences) {
+  $policy.refreshSeconds=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('refreshSeconds') 60) 'refreshSeconds'
+  $policy.staleSeconds=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('staleSeconds') 120) 'staleSeconds'
+  $policy.clockSkewToleranceSeconds=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('clockSkewToleranceSeconds') 5) 'clockSkewToleranceSeconds'
+  $policy.happyMinRemaining=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('happyMinRemaining','happyThreshold') 50) 'happyMinRemaining'
+  $policy.worriedMaxRemaining=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('worriedMaxRemaining','worriedThreshold') 20) 'worriedMaxRemaining'
+  $policy.exhaustedMaxRemaining=ConvertTo-PolicyNumber (Get-PolicyValue $Preferences @('exhaustedMaxRemaining') 0) 'exhaustedMaxRemaining'
+ }
+ if($policy.refreshSeconds -lt 30 -or $policy.refreshSeconds -gt 600){throw 'refreshSeconds is out of range (30..600)'}
+ if($policy.staleSeconds -lt 60 -or $policy.staleSeconds -gt 3600 -or $policy.staleSeconds -lt $policy.refreshSeconds+30){throw 'staleSeconds is out of range or below refreshSeconds+30'}
+ if($policy.clockSkewToleranceSeconds -ne 5){throw 'clockSkewToleranceSeconds must equal 5'}
+ if($policy.happyMinRemaining -lt 1 -or $policy.happyMinRemaining -gt 100){throw 'happyMinRemaining is out of range (1..100)'}
+ if($policy.worriedMaxRemaining -lt 0 -or $policy.worriedMaxRemaining -gt 99 -or $policy.worriedMaxRemaining -ge $policy.happyMinRemaining){throw 'worriedMaxRemaining is invalid'}
+ if($policy.exhaustedMaxRemaining -ne 0){throw 'exhaustedMaxRemaining must equal 0'}
+ return $policy
+}
+
+function Set-UsageContract($Data,$Policy=$null) {
+ if ($null -eq $Data) { return $Data }
+ $policy=Get-UsagePolicy $Policy
+ if ($Data -is [Collections.IDictionary]) {
+  $Data['protocolVersion']=2
+  $Data['policy']=$policy
+ } else {
+  $Data | Add-Member -NotePropertyName protocolVersion -NotePropertyValue 2 -Force
+  $Data | Add-Member -NotePropertyName policy -NotePropertyValue $policy -Force
+ }
+ return $Data
+}
+
+function Convert-Usage($response,$Policy=$null) {
  $bucket = $null
  if ($null -ne $response.rateLimitsByLimitId) { $bucket = $response.rateLimitsByLimitId.codex }
  if ($null -eq $bucket -and ($null -eq $response.rateLimits.limitId -or $response.rateLimits.limitId -eq 'codex')) { $bucket = $response.rateLimits }
@@ -22,22 +77,33 @@ function Convert-Usage($response) {
   # Written to usage.json so an unrecognised window length is diagnosable.
   $result.unmappedDurationMins=@($ordered | ForEach-Object { $_.mins })
  }
- return $result
+ return (Set-UsageContract $result $Policy)
 }
 
-function Get-UsageMood($Data,[long]$Now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(),[double]$StaleSeconds=120,[double]$HappyThreshold=50,[double]$WorriedThreshold=20) {
+function ConvertTo-UsageNumber($Value,[switch]$Integer) {
+ if($null -eq $Value -or $Value -is [bool] -or $Value -is [string]){return $null}
+ $number=0.0
+ $text=[Convert]::ToString($Value,[Globalization.CultureInfo]::InvariantCulture)
+ if(-not [double]::TryParse($text,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or [double]::IsNaN($number) -or [double]::IsInfinity($number)){return $null}
+ if($Integer -and [Math]::Truncate($number) -ne $number){return $null}
+ return $number
+}
+
+function Get-UsageMood($Data,[long]$Now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(),[double]$StaleSeconds=120,[double]$HappyThreshold=50,[double]$WorriedThreshold=20,$Policy=$null) {
  $unknown=@{name='unknown';remaining=$null;limiting=$null}
- if ($null -eq $Data -or $Data.status -ne 'ok' -or $null -eq $Data.updatedAt -or $Now-$Data.updatedAt -ge $StaleSeconds -or $Data.updatedAt -gt $Now+5) { return $unknown }
+ $effective=if($null -ne $Policy){Get-UsagePolicy $Policy}else{Get-UsagePolicy @{refreshSeconds=60;staleSeconds=$StaleSeconds;happyThreshold=$HappyThreshold;worriedThreshold=$WorriedThreshold}}
+ $stamp=if($null -eq $Data){$null}else{ConvertTo-UsageNumber $Data.updatedAt -Integer}
+ if ($null -eq $Data -or $Data.status -ne 'ok' -or $null -eq $stamp -or $Now-$stamp -ge $effective.staleSeconds -or $stamp -gt $Now+$effective.clockSkewToleranceSeconds) { return $unknown }
  $lowest=101.0; $limiting=$null
  foreach ($key in @('fiveHour','weekly')) {
   $window=$Data.$key
   if ($null -eq $window -or $null -eq $window.remaining) { return $unknown }
-  if ($null -ne $window.resetsAt -and $window.resetsAt -le $Now) { return $unknown }
-  $r=[double]$window.remaining
-  if ([double]::IsNaN($r) -or [double]::IsInfinity($r) -or $r -lt 0 -or $r -gt 100) { return $unknown }
+  $reset=ConvertTo-UsageNumber $window.resetsAt -Integer
+  $r=ConvertTo-UsageNumber $window.remaining
+  if ($null -eq $reset -or $reset -le $Now -or $null -eq $r -or $r -lt 0 -or $r -gt 100) { return $unknown }
   if ($r -lt $lowest) { $lowest=$r; $limiting=$key }
  }
- $name=if ($lowest -le 0) {'exhausted'} elseif ($lowest -le $WorriedThreshold) {'worried'} elseif ($lowest -ge $HappyThreshold) {'happy'} else {'calm'}
+ $name=if ($lowest -le $effective.exhaustedMaxRemaining) {'exhausted'} elseif ($lowest -le $effective.worriedMaxRemaining) {'worried'} elseif ($lowest -ge $effective.happyMinRemaining) {'happy'} else {'calm'}
  return @{name=$name;remaining=$lowest;limiting=$limiting}
 }
 

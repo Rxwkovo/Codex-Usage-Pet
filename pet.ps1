@@ -23,6 +23,7 @@ if (-not $Preview -and -not $Smoke -and (Test-Path $script:preferencesPath)) {
   if(-not (Test-Preferences $candidate)) {$script:preferences=$candidate}
  } catch { }
 }
+$script:usagePolicy=Get-UsagePolicy $script:preferences
 $script:settingsWindow=$null
 $script:compact=0.0; $script:compactTarget=0.0; $script:compactFrom=0.0; $script:compactStarted=0.0
 $script:lastInteraction=[DateTime]::Now; $script:expandedUntil=[DateTime]::Now
@@ -87,7 +88,9 @@ function Refresh-Usage {
   $script:worker = $null
  }
  $workerPath = Join-Path $PSScriptRoot 'read-usage.ps1'
- $script:worker = Start-Process powershell.exe -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$workerPath+'"') -WindowStyle Hidden -PassThru
+ $invariant=[Globalization.CultureInfo]::InvariantCulture
+ $policyArgs=' -RefreshSeconds '+[Convert]::ToString($script:usagePolicy.refreshSeconds,$invariant)+' -StaleSeconds '+[Convert]::ToString($script:usagePolicy.staleSeconds,$invariant)+' -HappyThreshold '+[Convert]::ToString($script:usagePolicy.happyMinRemaining,$invariant)+' -WorriedThreshold '+[Convert]::ToString($script:usagePolicy.worriedMaxRemaining,$invariant)
+ $script:worker = Start-Process powershell.exe -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$workerPath+'"'+$policyArgs) -WindowStyle Hidden -PassThru
  $script:workerStarted = [DateTime]::Now
  $script:nextRefresh = [DateTime]::Now.AddSeconds($script:preferences.refreshSeconds)
 }
@@ -96,7 +99,7 @@ function Show-Usage {
  if (-not (Test-Path -LiteralPath $path)) { Set-UsageMood (Get-UsageMood $null); return }
  try {
   $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-  Set-UsageMood (Get-UsageMood $data -StaleSeconds $script:preferences.staleSeconds -HappyThreshold $script:preferences.happyThreshold -WorriedThreshold $script:preferences.worriedThreshold)
+  Set-UsageMood (Get-UsageMood $data -Policy $script:usagePolicy)
   $failureCount=if($null -ne $data.failureCount){[int]$data.failureCount}else{0}
   if($failureCount -ge 3) {
    $pet.ToolTip='额度接口连续失败，请检查网络连接、登录状态或 Codex 版本。'
@@ -133,7 +136,7 @@ function Show-Usage {
    $stamp = [DateTimeOffset]::FromUnixTimeSeconds($data.updatedAt).LocalDateTime.ToString('HH:mm')
    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()-$data.updatedAt
    $route = $(if ($data.route -eq 'direct') {'直连'} else {'系统网络'})
-   $sync.Text = $(if ($failureCount -ge 3) {'连续失败 '+$failureCount+' 次 · 请检查网络或 Codex'} elseif ($data.status -eq 'ok' -and $age -lt $script:preferences.staleSeconds) {$route+' '+$stamp+' · 悬停查看重置'} else {'缓存 '+$stamp+' · 连接待恢复'})
+   $sync.Text = $(if ($failureCount -ge 3) {'连续失败 '+$failureCount+' 次 · 请检查网络或 Codex'} elseif ($data.status -eq 'ok' -and $age -lt $script:usagePolicy.staleSeconds) {$route+' '+$stamp+' · 悬停查看重置'} else {'缓存 '+$stamp+' · 连接待恢复'})
   } else { $sync.Text='未连接 · 请登录 Codex 后刷新' }
  } catch { Set-UsageMood (Get-UsageMood $null) }
 }

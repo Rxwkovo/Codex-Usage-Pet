@@ -119,6 +119,11 @@ function Stop-MobileLink {
  $script:mobileStartedAt=[DateTime]::MinValue
  $script:mobileMessage='同步已关闭，手机会保留上次数据并提示过期。'
 }
+function Get-MobilePolicyArguments($Preferences) {
+ $policy=Get-UsagePolicy $Preferences
+ $invariant=[Globalization.CultureInfo]::InvariantCulture
+ return ' --refresh-seconds '+[Convert]::ToString($policy.refreshSeconds,$invariant)+' --stale-seconds '+[Convert]::ToString($policy.staleSeconds,$invariant)+' --happy-threshold '+[Convert]::ToString($policy.happyMinRemaining,$invariant)+' --worried-threshold '+[Convert]::ToString($policy.worriedMaxRemaining,$invariant)
+}
 function Start-MobileLink {
  $errorText=Test-MobileConfig $script:mobileConfig
  if($errorText){throw $errorText}
@@ -129,7 +134,8 @@ function Start-MobileLink {
  Stop-MobileLink
  Protect-MobileDirectory $script:mobileRoot
  $script:mobileSession=[Guid]::NewGuid().ToString('N')
- $argsText='--host '+$script:mobileConfig.address+' --port '+$script:mobileConfig.port+' --invite-minutes '+$script:mobileConfig.inviteMinutes+' --owner '+$PID+' --session '+$script:mobileSession+' --state "'+$script:mobileState+'" --control "'+$script:mobileRoot+'" --usage "'+(Join-Path $PSScriptRoot 'usage.json')+'"'
+ $policyArgs=Get-MobilePolicyArguments $script:preferences
+ $argsText='--host '+$script:mobileConfig.address+' --port '+$script:mobileConfig.port+' --invite-minutes '+$script:mobileConfig.inviteMinutes+' --owner '+$PID+' --session '+$script:mobileSession+' --state "'+$script:mobileState+'" --control "'+$script:mobileRoot+'" --usage "'+(Join-Path $PSScriptRoot 'usage.json')+'"'+$policyArgs
  $info=New-Object Diagnostics.ProcessStartInfo
  $info.FileName=$exe; $info.Arguments=$argsText; $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle='Hidden'
  $script:mobileProcess=[Diagnostics.Process]::Start($info)

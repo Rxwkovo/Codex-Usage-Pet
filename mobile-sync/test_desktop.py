@@ -16,7 +16,7 @@ import urllib.request
 
 from desktop import ConnectionDeadline, DesktopBridge, atomic_json, make_desktop_server, read_json
 from protocol import (POLICY, Bridge as ProtocolBridge, SourceConcurrencyLimit,
-                      SourceRateLimit, certificate, sanitize)
+                      SourceRateLimit, certificate, normalize_policy, sanitize)
 from sync_core import Bridge as CoreBridge, sanitize as core_sanitize
 from sync_server import (ConnectionDeadline as CoreConnectionDeadline,
                          make_bounded_server)
@@ -123,6 +123,30 @@ class DesktopProtocolTests(unittest.TestCase):
         self.assertEqual(sanitize(missing, now=now)['status'], 'stale')
         reset = dict(base); reset['fiveHour'] = dict(remaining=76, resetsAt=now)
         self.assertEqual(sanitize(reset, now=now)['status'], 'stale')
+        for value in (None, '1000001', 1000001.5, True):
+            bad = dict(base); bad['fiveHour'] = dict(remaining=76, resetsAt=value)
+            self.assertEqual(sanitize(bad, now=now)['status'], 'stale')
+        for value in ('76', True, float('inf')):
+            bad = dict(base); bad['fiveHour'] = dict(remaining=value, resetsAt=now+1)
+            self.assertEqual(sanitize(bad, now=now)['status'], 'stale')
+
+    def test_validated_desktop_policy_is_published_and_snapshot_policy_ignored(self):
+        custom = normalize_policy(dict(
+            refreshSeconds=300, staleSeconds=360, clockSkewToleranceSeconds=5,
+            happyMinRemaining=80, worriedMaxRemaining=20, exhaustedMaxRemaining=0))
+        sample = dict(status='ok', updatedAt=1000,
+                      fiveHour=dict(remaining=60, resetsAt=3000),
+                      weekly=dict(remaining=60, resetsAt=5000),
+                      policy=dict(staleSeconds=999999, happyMinRemaining=1))
+        self.assertEqual(sanitize(sample, now=1180)['status'], 'stale')
+        published = sanitize(sample, now=1180, policy=custom)
+        self.assertEqual(published['status'], 'ok')
+        self.assertEqual(published['policy'], custom)
+        fractional = normalize_policy(dict(
+            refreshSeconds=300.5, staleSeconds=360.5, clockSkewToleranceSeconds=5,
+            happyMinRemaining=80, worriedMaxRemaining=20, exhaustedMaxRemaining=0))
+        self.assertEqual(fractional['refreshSeconds'], 300.5)
+        self.assertEqual(fractional['staleSeconds'], 360.5)
 
     def test_one_time_pairing_renewal_and_revocation(self):
         original = self.bridge.invite
@@ -183,7 +207,8 @@ class DesktopLifecycleTests(unittest.TestCase):
             exe = os.environ.get('MOBILE_TEST_EXE')
             command = [exe] if exe else [sys.executable, str(Path(__file__).with_name('desktop.py'))]
             command += ['--host','127.0.0.1','--test-loopback','--port',str(port),'--owner',str(parent.pid),
-                        '--state',str(state),'--control',str(control),'--usage',str(source),'--session','test-session']
+                        '--state',str(state),'--control',str(control),'--usage',str(source),'--session','test-session',
+                        '--refresh-seconds','300.5','--stale-seconds','360.5','--happy-threshold','80','--worried-threshold','20']
             process = subprocess.Popen(command, creationflags=flags)
             def status(): return read_json(control/'status.json', {})
             try:
@@ -191,7 +216,11 @@ class DesktopLifecycleTests(unittest.TestCase):
                 spec = json.loads(base64.urlsafe_b64decode((control/'pairing.txt').read_text()[5:]))
                 request = client(state/'server.pem', port)
                 token = request('/pair', spec['code'], 'POST')['token']
-                self.assertEqual(request('/usage', token)['weekly']['remaining'], 24)
+                usage = request('/usage', token)
+                self.assertEqual(usage['weekly']['remaining'], 24)
+                self.assertEqual(usage['policy']['refreshSeconds'], 300.5)
+                self.assertEqual(usage['policy']['staleSeconds'], 360.5)
+                self.assertEqual(usage['policy']['happyMinRemaining'], 80)
                 self.wait_for(lambda: status().get('online') == 1 and not (control/'pairing.png').exists())
                 atomic_json(control/'command-1.json', dict(session='wrong-session', action='revoke'))
                 self.wait_for(lambda: not (control/'command-1.json').exists())

@@ -1,7 +1,25 @@
 $ErrorActionPreference='Stop'
 . (Join-Path (Split-Path $PSScriptRoot) 'usage-core.ps1')
+. (Join-Path (Split-Path $PSScriptRoot) 'preferences-core.ps1')
 function Assert($condition,$message) { if (-not $condition) { throw $message } }
 $normal = Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurationMins=300;usedPercent=25;resetsAt=123};secondary=@{windowDurationMins=10080;usedPercent=90;resetsAt=456}}})
+Assert ($normal.protocolVersion -eq 2) 'Desktop quota output uses protocol v2'
+Assert ($normal.policy.refreshSeconds -eq 60 -and $normal.policy.staleSeconds -eq 120) 'Desktop quota output carries the shared validity policy'
+Assert ($normal.policy.clockSkewToleranceSeconds -eq 5) 'Desktop quota output carries the clock-skew tolerance'
+Assert ($normal.policy.happyMinRemaining -eq 50 -and $normal.policy.worriedMaxRemaining -eq 20 -and $normal.policy.exhaustedMaxRemaining -eq 0) 'Desktop quota output carries the shared mood thresholds'
+$preferences=Get-DefaultPreferences
+$preferences.refreshSeconds=300; $preferences.staleSeconds=360; $preferences.happyThreshold=80; $preferences.worriedThreshold=20
+Assert ($null -eq (Test-Preferences $preferences)) 'The real settings schema accepts the custom quota policy'
+$customPolicy=Get-UsagePolicy $preferences
+$custom=Convert-Usage ([pscustomobject]@{rateLimits=@{primary=@{windowDurationMins=300;usedPercent=40;resetsAt=3000};secondary=@{windowDurationMins=10080;usedPercent=40;resetsAt=5000}}}) $customPolicy
+Assert ($custom.policy.refreshSeconds -eq 300 -and $custom.policy.staleSeconds -eq 360) 'Validated refresh and stale settings enter the published contract'
+Assert ($custom.policy.happyMinRemaining -eq 80 -and $custom.policy.worriedMaxRemaining -eq 20) 'Validated mood settings enter the published contract'
+$fractionalPreferences=$preferences.Clone();$fractionalPreferences.refreshSeconds=300.5;$fractionalPreferences.staleSeconds=360.5
+Assert ($null -eq (Test-Preferences $fractionalPreferences)) 'Existing fractional-second settings remain valid'
+$fractionalPolicy=Get-UsagePolicy $fractionalPreferences
+Assert ($fractionalPolicy.refreshSeconds -eq 300.5 -and $fractionalPolicy.staleSeconds -eq 360.5) 'Fractional timing settings must not be rounded or replaced by defaults'
+$badPolicy=$false; try {[void](Get-UsagePolicy @{refreshSeconds=300;staleSeconds=329;happyThreshold=80;worriedThreshold=20})} catch {$badPolicy=$true}
+Assert $badPolicy 'Invalid policy relationships must be rejected before publishing'
 Assert ($normal.fiveHour.remaining -eq 75) 'Five-hour remaining conversion'
 Assert ($normal.weekly.remaining -eq 10) 'Weekly remaining conversion'
 $swapped = Convert-Usage ([pscustomobject]@{rateLimitsByLimitId=@{codex=@{secondary=@{windowDurationMins=300;usedPercent=120};primary=@{windowDurationMins=10080;usedPercent=-5}}};rateLimits=@{primary=@{windowDurationMins=300;usedPercent=50}}})
@@ -38,4 +56,4 @@ Assert (Test-UsageWorkerStale $t0 $t0.AddSeconds(91)) 'A wedged worker must be r
 Assert (-not (Test-UsageWorkerStale $t0 $t0.AddSeconds(-30))) 'A backwards clock must not reap a fresh worker'
 Assert (-not (Test-UsageWorkerStale ([DateTime]::MinValue) $t0)) 'An unset stamp means not recorded, not stale'
 Assert (Test-UsageWorkerStale $t0 $t0.AddSeconds(12) 12.0) 'The deadline must be a parameter'
-'PASS: 21 usage assertions'
+'PASS: usage conversion, protocol v2 policy and worker watchdog'

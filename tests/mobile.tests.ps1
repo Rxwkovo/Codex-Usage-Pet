@@ -1,4 +1,6 @@
 ﻿$ErrorActionPreference='Stop'
+. (Join-Path (Split-Path $PSScriptRoot) 'usage-core.ps1')
+. (Join-Path (Split-Path $PSScriptRoot) 'preferences-core.ps1')
 . (Join-Path (Split-Path $PSScriptRoot) 'mobile-core.ps1')
 function Assert($value,$label){if(-not $value){throw $label}}
 $config=@{address='192.168.3.10';port=47831;inviteMinutes=10;autoStart=$false}
@@ -12,6 +14,10 @@ Assert ((Get-MobileStatusText $snapshot) -match '等待手机同步') 'Paired is
 $snapshot.online=1; $snapshot.usage.status='stale'
 Assert ((Get-MobileStatusText $snapshot) -match '尚未更新') 'Connected but stale quota must be explicit'
 Assert ((Get-MobileStatus).state -eq 'stopped') 'Disabled by default'
+$policyPreferences=Get-DefaultPreferences
+$policyPreferences.refreshSeconds=300.5;$policyPreferences.staleSeconds=360.5;$policyPreferences.happyThreshold=80;$policyPreferences.worriedThreshold=20
+$policyArguments=Get-MobilePolicyArguments $policyPreferences
+foreach($expected in @('--refresh-seconds 300.5','--stale-seconds 360.5','--happy-threshold 80','--worried-threshold 20')){Assert ($policyArguments.Contains($expected)) 'Validated desktop policy must enter the mobile service command line without rounding'}
 $script:mobileRoot=Join-Path $env:TEMP ('CodexPet-mobile-config-test-'+[Guid]::NewGuid().ToString('N'))
 [void](Protect-MobileDirectory $script:mobileRoot)
 try {

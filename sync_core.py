@@ -40,6 +40,51 @@ POLICY = {
 }
 
 
+def _finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("expected a finite number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("expected a finite number")
+    return number
+
+
+def _unix_seconds(value):
+    number = _finite_number(value)
+    if not number.is_integer():
+        raise ValueError("expected integer Unix seconds")
+    return int(number)
+
+
+def normalize_policy(policy=None):
+    """Validate a trusted policy source; never read policy from a usage snapshot."""
+    if policy is None:
+        return dict(POLICY)
+    if not isinstance(policy, dict):
+        raise ValueError("policy must be an object")
+    required = set(POLICY)
+    if not required.issubset(policy):
+        raise ValueError("policy is incomplete")
+    result = {key: _finite_number(policy[key]) for key in POLICY}
+    if not 30 <= result["refreshSeconds"] <= 600:
+        raise ValueError("refreshSeconds is out of range")
+    if not 60 <= result["staleSeconds"] <= 3600:
+        raise ValueError("staleSeconds is out of range")
+    if result["staleSeconds"] < result["refreshSeconds"] + 30:
+        raise ValueError("staleSeconds must exceed refreshSeconds")
+    if result["clockSkewToleranceSeconds"] != 5:
+        raise ValueError("clock skew tolerance is fixed")
+    if not 1 <= result["happyMinRemaining"] <= 100:
+        raise ValueError("happy threshold is out of range")
+    if not 0 <= result["worriedMaxRemaining"] <= 99:
+        raise ValueError("worried threshold is out of range")
+    if result["happyMinRemaining"] <= result["worriedMaxRemaining"]:
+        raise ValueError("happy threshold must exceed worried threshold")
+    if result["exhaustedMaxRemaining"] != 0:
+        raise ValueError("exhausted threshold is fixed")
+    return result
+
+
 def is_lan_ip(host):
     try:
         ip = ipaddress.ip_address(host)
@@ -48,12 +93,13 @@ def is_lan_ip(host):
         return False
 
 
-def sanitize(data, now=None):
+def sanitize(data, now=None, policy=None):
     """Whitelist only the documented quota fields; reject non-finite percentages."""
     now = time.time() if now is None else float(now)
+    policy = normalize_policy(policy)
     result = {
         "protocolVersion": PROTOCOL_VERSION,
-        "policy": dict(POLICY),
+        "policy": policy,
         "status": "stale",
         "updatedAt": 0,
         "serverTime": int(now),
@@ -67,23 +113,19 @@ def sanitize(data, now=None):
     if not isinstance(data, dict):
         return result
     try:
-        stamp = int(data.get("updatedAt", 0))
+        stamp = _unix_seconds(data.get("updatedAt", 0))
         result["updatedAt"] = stamp
         for field in ("fiveHour", "weekly"):
             window = data.get(field)
             if not isinstance(window, dict):
                 continue
-            raw = window["remaining"]
-            # bool is a subclass of int, so float(True) used to clear the range check
-            # and get published to the phone as "1% remaining".
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            value = _finite_number(window["remaining"])
+            if not 0 <= value <= 100:
                 continue
-            value = float(raw)
-            if not math.isfinite(value) or not 0 <= value <= 100:
-                continue
-            result[field] = {"remaining": value, "resetsAt": int(window.get("resetsAt") or 0)}
+            result[field] = {"remaining": value,
+                             "resetsAt": _unix_seconds(window.get("resetsAt"))}
         if (data.get("status") == "ok"
-                and -POLICY["clockSkewToleranceSeconds"] <= now - stamp < POLICY["staleSeconds"]
+                and -policy["clockSkewToleranceSeconds"] <= now - stamp < policy["staleSeconds"]
                 and all(
             result[k] is not None and result[k]["resetsAt"] > now for k in ("fiveHour", "weekly")
         )):
@@ -221,12 +263,13 @@ class Bridge:
     Both entry points use this class directly or subclass it for local UI state.
     """
 
-    def __init__(self, state):
+    def __init__(self, state, policy=None):
         self.state = state
         self.invite = secrets.token_urlsafe(32)
         self.expires = time.time() + 600
         self.lock = threading.Lock()
         self.tokens_file = state / "devices.json"
+        self.policy = normalize_policy(policy)
         self.tokens = self._read_tokens()
         self.attempts = {}
 
@@ -296,6 +339,7 @@ class Bridge:
 
     def usage(self):
         try:
-            return sanitize(json.loads((self.state / "usage.json").read_text(encoding="utf-8-sig")))
+            return sanitize(json.loads((self.state / "usage.json").read_text(encoding="utf-8-sig")),
+                            policy=self.policy)
         except (OSError, ValueError, AttributeError):
-            return sanitize({})
+            return sanitize({}, policy=self.policy)

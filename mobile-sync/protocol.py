@@ -21,6 +21,7 @@ from sync_core import (  # noqa: E402,F401
     _replace,
     certificate,
     is_lan_ip,
+    normalize_policy,
     sanitize,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "SourceRateLimit",
     "certificate",
     "is_lan_ip",
+    "normalize_policy",
     "sanitize",
 ]

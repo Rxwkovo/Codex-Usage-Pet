@@ -19,7 +19,7 @@ import threading
 import time
 
 import qrcode
-from protocol import Bridge, certificate, is_lan_ip, sanitize
+from protocol import Bridge, certificate, is_lan_ip, normalize_policy, sanitize
 from sync_server import ConnectionDeadline, make_bounded_server
 
 
@@ -104,8 +104,8 @@ class ParentWatch:
 
 
 class DesktopBridge(Bridge):
-    def __init__(self, state, usage_path, invite_minutes):
-        super().__init__(state)
+    def __init__(self, state, usage_path, invite_minutes, policy=None):
+        super().__init__(state, policy=policy)
         self.usage_path = usage_path
         self.invite_minutes = invite_minutes
         self.last_seen = {}
@@ -126,7 +126,7 @@ class DesktopBridge(Bridge):
         data = read_json(self.usage_path, {})
         if not isinstance(data, dict):
             data = {}
-        return sanitize(data)
+        return sanitize(data, policy=self.policy)
 
     def authenticated_usage(self, token):
         if len(token) > 128:
@@ -167,7 +167,22 @@ def main():
     p.add_argument('--owner', type=int, required=True)
     p.add_argument('--session', required=True)
     p.add_argument('--test-loopback', action='store_true')
+    p.add_argument('--refresh-seconds', type=float, default=60)
+    p.add_argument('--stale-seconds', type=float, default=120)
+    p.add_argument('--happy-threshold', type=float, default=50)
+    p.add_argument('--worried-threshold', type=float, default=20)
     args = p.parse_args()
+    try:
+        policy = normalize_policy({
+            'refreshSeconds': args.refresh_seconds,
+            'staleSeconds': args.stale_seconds,
+            'clockSkewToleranceSeconds': 5,
+            'happyMinRemaining': args.happy_threshold,
+            'worriedMaxRemaining': args.worried_threshold,
+            'exhaustedMaxRemaining': 0,
+        })
+    except ValueError as error:
+        p.error(str(error))
     if not is_lan_ip(args.host) and not (args.test_loopback and args.host == '127.0.0.1'):
         p.error('Use a connected private LAN IPv4')
     if not 1024 <= args.port <= 65535 or not 1 <= args.invite_minutes <= 60:
@@ -195,7 +210,7 @@ def main():
                 raise RuntimeError('already_running')
         parent = ParentWatch(args.owner)
         cert, key, pin = certificate(args.state, args.host)
-        bridge = DesktopBridge(args.state, args.usage, args.invite_minutes)
+        bridge = DesktopBridge(args.state, args.usage, args.invite_minutes, policy=policy)
         server = make_desktop_server(bridge, args.host, args.port, cert, key)
         owned = True
         url = f'https://{args.host}:{args.port}'

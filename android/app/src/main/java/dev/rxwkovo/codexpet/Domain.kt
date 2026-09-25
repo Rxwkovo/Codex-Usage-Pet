@@ -37,22 +37,57 @@ object PairingEndpoint {
 }
 
 data class WindowQuota(val remaining: Double, val resetsAt: Long)
+
+/** Public policy carried by /usage v2.  Missing or malformed policy keeps legacy peers safe. */
+data class UsagePolicy(
+    val refreshSeconds: Double = DEFAULT_REFRESH_SECONDS,
+    val staleSeconds: Double = DEFAULT_STALE_SECONDS,
+    val clockSkewToleranceSeconds: Double = DEFAULT_CLOCK_SKEW_SECONDS,
+    val happyMinRemaining: Double = DEFAULT_HAPPY_MIN,
+    val worriedMaxRemaining: Double = DEFAULT_WORRIED_MAX,
+    val exhaustedMaxRemaining: Double = DEFAULT_EXHAUSTED_MAX
+) {
+    fun valid() = refreshSeconds.isFinite() && staleSeconds.isFinite() && clockSkewToleranceSeconds.isFinite() &&
+        refreshSeconds in 30.0..600.0 && staleSeconds in 60.0..3600.0 && staleSeconds >= refreshSeconds+30.0 &&
+        clockSkewToleranceSeconds == DEFAULT_CLOCK_SKEW_SECONDS &&
+        exhaustedMaxRemaining.isFinite() && worriedMaxRemaining.isFinite() && happyMinRemaining.isFinite() &&
+        exhaustedMaxRemaining == DEFAULT_EXHAUSTED_MAX && worriedMaxRemaining in 0.0..99.0 && happyMinRemaining in 1.0..100.0 &&
+        worriedMaxRemaining < happyMinRemaining
+
+    companion object {
+        const val DEFAULT_REFRESH_SECONDS = 60.0
+        const val DEFAULT_STALE_SECONDS = 120.0
+        const val DEFAULT_CLOCK_SKEW_SECONDS = 5.0
+        const val DEFAULT_HAPPY_MIN = 50.0
+        const val DEFAULT_WORRIED_MAX = 20.0
+        const val DEFAULT_EXHAUSTED_MAX = 0.0
+        val DEFAULT = UsagePolicy()
+        fun fromDeclared(protocolVersion: Long, declared: UsagePolicy?): UsagePolicy =
+            if(protocolVersion == 2L && declared?.valid()==true) declared else DEFAULT
+    }
+}
+
 data class Usage(
     val five: WindowQuota?, val week: WindowQuota?, val updatedAt: Long, val status: String,
-    val serverTime: Long = updatedAt, val receivedAt: Long = serverTime
+    val serverTime: Long = updatedAt, val receivedAt: Long = serverTime,
+    val policy: UsagePolicy = UsagePolicy.DEFAULT
 ) {
-    // The quota timestamps come from the computer, while now comes from the phone.
-    // Compare values within their own clock domains so ordinary clock skew cannot make a
-    // freshly received snapshot look expired (or keep an old one fresh).
-    fun fresh(now: Long): Boolean = status == "ok" && receivedAt <= now + 5 && now - receivedAt < 120 &&
-        updatedAt <= serverTime + 5 && serverTime - updatedAt < 120 &&
-        listOf(five, week).all { it != null && it.remaining.isFinite() && it.remaining in 0.0..100.0 && it.resetsAt > serverTime }
+    // serverTime was observed when the phone received this response.  Advance that clock by
+    // local elapsed time so an old cached response cannot remain fresh for another full window.
+    fun serverNow(now: Long): Long = serverTime + (now - receivedAt)
+    fun fresh(now: Long): Boolean {
+        if(status != "ok" || !policy.valid() || receivedAt.toDouble() > now.toDouble() + policy.clockSkewToleranceSeconds) return false
+        val currentServerTime=serverNow(now)
+        return updatedAt <= currentServerTime + policy.clockSkewToleranceSeconds &&
+            currentServerTime - updatedAt < policy.staleSeconds &&
+            listOf(five, week).all { it != null && it.remaining.isFinite() && it.remaining in 0.0..100.0 && it.resetsAt > currentServerTime }
+    }
     fun localTime(serverValue: Long): Long =
         if(serverTime > 0 && receivedAt > 0) receivedAt + (serverValue - serverTime) else serverValue
     fun mood(now: Long): Int {
         if (!fresh(now)) return 0
         val low = min(five!!.remaining, week!!.remaining)
-        return when { low <= 0 -> 3; low <= 20 -> 2; low >= 50 -> 1; else -> 0 }
+        return when { low <= policy.exhaustedMaxRemaining -> 3; low <= policy.worriedMaxRemaining -> 2; low >= policy.happyMinRemaining -> 1; else -> 0 }
     }
 }
 

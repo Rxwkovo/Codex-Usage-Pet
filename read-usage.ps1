@@ -1,6 +1,13 @@
-param([switch]$DirectOnly)
+param(
+ [switch]$DirectOnly,
+ [double]$RefreshSeconds=60,
+ [double]$StaleSeconds=120,
+ [double]$HappyThreshold=50,
+ [double]$WorriedThreshold=20
+)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'usage-core.ps1')
+$policy=Get-UsagePolicy @{refreshSeconds=$RefreshSeconds;staleSeconds=$StaleSeconds;happyThreshold=$HappyThreshold;worriedThreshold=$WorriedThreshold}
 $outputPath = Join-Path $PSScriptRoot 'usage.json'
 function Read-OnlineUsage([bool]$direct) {
  $process = $null; $started = $false
@@ -43,7 +50,7 @@ function Read-OnlineUsage([bool]$direct) {
   }
   if ($message.id -eq 2) {
    if ($message.error) { throw 'Sign in to Codex with ChatGPT and retry' }
-   $result = Convert-Usage $message.result
+   $result = Convert-Usage $message.result $policy
    break
   }
   $pending = $process.StandardOutput.ReadLineAsync()
@@ -92,6 +99,7 @@ try {
  $result | Add-Member -NotePropertyName failureCount -NotePropertyValue ([Math]::Min(999,$previousFailures+1)) -Force
  $result | Add-Member -NotePropertyName lastFailureAt -NotePropertyValue ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Force
 }
+$result = Set-UsageContract $result $policy
 $temp = "$outputPath.tmp"
 $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temp -Encoding UTF8
 Move-Item -LiteralPath $temp -Destination $outputPath -Force
