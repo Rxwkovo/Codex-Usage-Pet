@@ -1,6 +1,6 @@
 # Keep in step with mobile-sync/requirements.txt. CI installs both into one
 # environment, and the old "cryptography>=45,<49" bound could not be satisfied
 # alongside the pinned 50.0.1 the desktop service uses.
-cryptography==50.0.1
+cryptography==50.0.2
 qrcode==8.2
 Pillow==13.0.0
